@@ -1,18 +1,23 @@
 import { Users, TrendingUp, DollarSign, Building2, Shield, Settings, ChevronRight, Trash2, Crown, ArrowUpCircle, ArrowDownCircle, Plus, Calendar, Clock, BarChart3, FileText, UserCheck, UserX } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
+import { formatLongDate } from '../utils/time';
+import { api } from '../api/client';
 
 type Props = {
   onNavigate: (page: string) => void;
+  onLogout: () => void;
+  user: { id: string; name: string; role: string; token: string };
 };
 
 type Employee = {
   id: string;
+  _id?: string;
   name: string;
   role: string;
   department: string;
@@ -27,6 +32,7 @@ type Employee = {
 export function AdminDashboard({ onNavigate }: Props) {
   const currentHour = new Date().getHours();
   const greeting = currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
+  const todayLabel = formatLongDate(new Date());
 
   const [showEmployeeManagement, setShowEmployeeManagement] = useState(false);
   const [showFinancialReport, setShowFinancialReport] = useState(false);
@@ -36,134 +42,65 @@ export function AdminDashboard({ onNavigate }: Props) {
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
 
-  const [employees, setEmployees] = useState<Employee[]>([
-    {
-      id: '1',
-      name: 'Prabesh Shrestha',
-      role: 'Restaurant Manager',
-      department: 'Management',
-      level: 'Manager',
-      email: 'Prabesh.Shrestha@georgebrown.ca',
-      phone: '+1 555 555-5555',
-      hourlyRate: 28,
-      status: 'active',
-      joinDate: 'Sep 2024'
-    },
-    {
-      id: '2',
-      name: 'Alex Rodriguez',
-      role: 'Server',
-      department: 'Front of House',
-      level: 'Employee',
-      email: 'alex.rodriguez@restaurant.com',
-      phone: '+1 555 123-4567',
-      hourlyRate: 16,
-      status: 'active',
-      joinDate: 'Oct 2024'
-    },
-    {
-      id: '3',
-      name: 'Sarah Chen',
-      role: 'Server',
-      department: 'Front of House',
-      level: 'Employee',
-      email: 'sarah.chen@restaurant.com',
-      phone: '+1 555 234-5678',
-      hourlyRate: 16,
-      status: 'active',
-      joinDate: 'Nov 2024'
-    },
-    {
-      id: '4',
-      name: 'Jordan Lee',
-      role: 'Host',
-      department: 'Front of House',
-      level: 'Employee',
-      email: 'jordan.lee@restaurant.com',
-      phone: '+1 555 345-6789',
-      hourlyRate: 15,
-      status: 'active',
-      joinDate: 'Oct 2024'
-    },
-    {
-      id: '5',
-      name: 'Taylor Kim',
-      role: 'Bartender',
-      department: 'Bar',
-      level: 'Employee',
-      email: 'taylor.kim@restaurant.com',
-      phone: '+1 555 456-7890',
-      hourlyRate: 18,
-      status: 'active',
-      joinDate: 'Sep 2024'
-    },
-    {
-      id: '6',
-      name: 'Morgan Davis',
-      role: 'Server',
-      department: 'Front of House',
-      level: 'Employee',
-      email: 'morgan.davis@restaurant.com',
-      phone: '+1 555 567-8901',
-      hourlyRate: 16,
-      status: 'active',
-      joinDate: 'Nov 2024'
-    },
-    {
-      id: '7',
-      name: 'Casey Brown',
-      role: 'Host',
-      department: 'Front of House',
-      level: 'Employee',
-      email: 'casey.brown@restaurant.com',
-      phone: '+1 555 678-9012',
-      hourlyRate: 15,
-      status: 'active',
-      joinDate: 'Oct 2024'
-    },
-    {
-      id: '8',
-      name: 'Riley Martinez',
-      role: 'Chef',
-      department: 'Kitchen',
-      level: 'Employee',
-      email: 'riley.martinez@restaurant.com',
-      phone: '+1 555 789-0123',
-      hourlyRate: 22,
-      status: 'active',
-      joinDate: 'Sep 2024'
-    },
-    {
-      id: '9',
-      name: 'Jamie Wilson',
-      role: 'Sous Chef',
-      department: 'Kitchen',
-      level: 'Employee',
-      email: 'jamie.wilson@restaurant.com',
-      phone: '+1 555 890-1234',
-      hourlyRate: 20,
-      status: 'active',
-      joinDate: 'Oct 2024'
-    },
-  ]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
 
-  const dailyFinancials = {
-    date: 'December 4, 2025',
-    totalWages: 1840,
-    totalTips: 520,
-    totalRevenue: 4200,
-    hoursWorked: 78,
-    activeEmployees: 8,
-    laborCostPercentage: 32
+  const stableNumber = (seed: string, min: number, max: number) => {
+    const hash = seed.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const range = max - min + 1;
+    return (hash % range) + min;
   };
 
-  const weeklyFinancials = {
-    totalWages: 8920,
-    totalTips: 2340,
-    totalRevenue: 18500,
-    hoursWorked: 312,
-    laborCostPercentage: 33
-  };
+  const getId = (emp: Employee) => emp.id || emp._id || '';
+
+  const earningsBreakdown = useMemo(() => 
+    employees.slice(0, 5).map((emp) => {
+      const dailyHours = stableNumber((emp.id || (emp as any)._id || '') + emp.name, 5, 10);
+      const dailyTips = stableNumber(emp.email, 20, 80);
+      const dailyWage = dailyHours * emp.hourlyRate;
+
+      return {
+        employee: emp,
+        dailyHours,
+        dailyWage,
+        dailyTips,
+      };
+    })
+  , [employees]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [emps, overview] = await Promise.all([
+          api.getEmployees(user.token),
+          api.getOverviewReport(user.token),
+        ]);
+        setEmployees(emps as Employee[]);
+        if (overview?.daily) setDailyFinancials(overview.daily);
+        if (overview?.weekly) setWeeklyFinancials(overview.weekly);
+      } catch (err) {
+        // silent fail for now
+      }
+    };
+    load();
+  }, [user.token]);
+
+  const [dailyFinancials, setDailyFinancials] = useState({
+    date: todayLabel,
+    totalWages: 0,
+    totalTips: 0,
+    totalRevenue: 0,
+    hoursWorked: 0,
+    activeEmployees: 0,
+    laborCostPercentage: 0
+  });
+
+  const [weeklyFinancials, setWeeklyFinancials] = useState({
+    totalWages: 0,
+    totalTips: 0,
+    totalRevenue: 0,
+    hoursWorked: 0,
+    laborCostPercentage: 0
+  });
 
   const departments = [
     { name: 'Front of House', employees: 5, manager: 'Prabesh Shrestha', budget: 45000 },
@@ -174,7 +111,7 @@ export function AdminDashboard({ onNavigate }: Props) {
 
   const handlePromoteToManager = (employee: Employee) => {
     setEmployees(employees.map(emp => 
-      emp.id === employee.id 
+      getId(emp) === getId(employee)
         ? { ...emp, level: 'Manager', role: 'Manager' }
         : emp
     ));
@@ -186,7 +123,7 @@ export function AdminDashboard({ onNavigate }: Props) {
 
   const handleDemoteFromManager = (employee: Employee) => {
     setEmployees(employees.map(emp => 
-      emp.id === employee.id 
+      getId(emp) === getId(employee)
         ? { ...emp, level: 'Employee', role: 'Server' }
         : emp
     ));
@@ -197,8 +134,12 @@ export function AdminDashboard({ onNavigate }: Props) {
   };
 
   const handleRemoveEmployee = (employee: Employee) => {
-    setEmployees(employees.filter(emp => emp.id !== employee.id));
-    setConfirmationMessage(`${employee.name} has been removed from the system.`);
+    api.deleteEmployee(getId(employee), user.token)
+      .then(() => {
+        setEmployees(employees.filter(emp => getId(emp) !== getId(employee)));
+        setConfirmationMessage(`${employee.name} has been removed from the system.`);
+      })
+      .catch((err: any) => setConfirmationMessage(err.message));
     setTimeout(() => setConfirmationMessage(null), 3000);
     setShowRemoveModal(false);
     setSelectedEmployee(null);
@@ -256,7 +197,7 @@ export function AdminDashboard({ onNavigate }: Props) {
             </div>
             <Button 
               variant="ghost" 
-              onClick={() => onNavigate('landing')}
+              onClick={onLogout}
               className="hidden sm:inline-flex"
             >
               Log out
@@ -516,7 +457,7 @@ export function AdminDashboard({ onNavigate }: Props) {
                 </div>
                 <div className="space-y-2">
                   {groupedByLevel.Manager.map((employee) => (
-                    <div key={employee.id} className="p-4 rounded-xl border-2 border-amber-200 bg-amber-50 flex items-center justify-between group">
+                    <div key={getId(employee)} className="p-4 rounded-xl border-2 border-amber-200 bg-amber-50 flex items-center justify-between group">
                       <div className="flex items-center gap-3">
                         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-white">
                           {employee.name.split(' ').map(n => n[0]).join('')}
@@ -567,7 +508,7 @@ export function AdminDashboard({ onNavigate }: Props) {
                 </div>
                 <div className="space-y-2">
                   {groupedByLevel.Employee.map((employee) => (
-                    <div key={employee.id} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-blue-200 transition-colors">
+                    <div key={getId(employee)} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-blue-200 transition-colors">
                       <div className="flex items-center gap-3">
                         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white">
                           {employee.name.split(' ').map(n => n[0]).join('')}
@@ -627,7 +568,7 @@ export function AdminDashboard({ onNavigate }: Props) {
                     </div>
                     <div className="space-y-2">
                       {emps.map((emp) => (
-                        <div key={emp.id} className="flex items-center gap-2 p-2 rounded-lg bg-white border border-gray-100">
+                        <div key={getId(emp)} className="flex items-center gap-2 p-2 rounded-lg bg-white border border-gray-100">
                           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs">
                             {emp.name.split(' ').map(n => n[0]).join('')}
                           </div>
@@ -744,29 +685,23 @@ export function AdminDashboard({ onNavigate }: Props) {
               <h3 className="font-medium text-lg mb-4">Employee Earnings Breakdown</h3>
               
               <div className="space-y-2">
-                {employees.slice(0, 5).map((emp) => {
-                  const dailyHours = Math.floor(Math.random() * 8) + 4;
-                  const dailyWage = dailyHours * emp.hourlyRate;
-                  const dailyTips = Math.floor(Math.random() * 80) + 20;
-                  
-                  return (
-                    <div key={emp.id} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white">
-                          {emp.name.split(' ').map(n => n[0]).join('')}
-                        </div>
-                        <div>
-                          <div className="font-medium">{emp.name}</div>
-                          <div className="text-sm text-gray-600">{emp.role} • {dailyHours}h @ ${emp.hourlyRate}/hr</div>
-                        </div>
+                {earningsBreakdown.map(({ employee, dailyHours, dailyWage, dailyTips }) => (
+                  <div key={getId(employee)} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white">
+                        {employee.name.split(' ').map(n => n[0]).join('')}
                       </div>
-                      <div className="text-right">
-                        <div className="font-medium">${dailyWage + dailyTips}</div>
-                        <div className="text-xs text-gray-600">${dailyWage} wages + ${dailyTips} tips</div>
+                      <div>
+                        <div className="font-medium">{employee.name}</div>
+                        <div className="text-sm text-gray-600">{employee.role} • {dailyHours}h @ ${employee.hourlyRate}/hr</div>
                       </div>
                     </div>
-                  );
-                })}
+                    <div className="text-right">
+                      <div className="font-medium">${(dailyWage + dailyTips).toFixed(2)}</div>
+                      <div className="text-xs text-gray-600">${dailyWage.toFixed(2)} wages + ${dailyTips.toFixed(2)} tips</div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

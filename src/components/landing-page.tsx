@@ -32,7 +32,7 @@ export function LandingPage({ onNavigate }: Props) {
               Log in
             </Button>
             <Button 
-              onClick={() => onNavigate('login')}
+              onClick={() => onNavigate('signup')}
               className="rounded-full bg-[#2563EB] hover:bg-[#1d4ed8]"
             >
               Get started

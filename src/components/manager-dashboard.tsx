@@ -8,21 +8,53 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { ScheduleBuilder } from './schedule-builder';
 import { Clock, Mail, Phone, MapPin, Building2, Shield, Settings, Bell, Trash2 } from 'lucide-react';
+import { addDays, calculateShiftDurationHours, formatHours, formatLongDate, formatMonthDay, startOfWeek, toISODate } from '../utils/time';
+import { api } from '../api/client';
+import { useEffect } from 'react';
 
 type Props = {
   onNavigate: (page: string) => void;
+  onLogout: () => void;
+  user: { id: string; name: string; role: string; token: string };
 };
 
 type Shift = {
   employee: string;
+  employeeId?: string;
   role: string;
   startTime: string;
   endTime: string;
   date: string;
 };
 
-export function ManagerDashboard({ onNavigate }: Props) {
-  const currentHour = new Date().getHours();
+type Employee = {
+  _id: string;
+  name: string;
+  role: string;
+  status?: string;
+  hourlyRate?: number;
+};
+
+type Punch = {
+  _id: string;
+  employeeId: string;
+  employeeName: string;
+  clockIn: string;
+  clockOut?: string;
+  breaks: { start: string; end?: string }[];
+};
+
+export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
+  const today = new Date();
+  const currentHour = today.getHours();
+  const todayIso = toISODate(today);
+  const todayLabel = formatLongDate(today);
+  const biWeeklyStart = startOfWeek(today);
+  const biWeeklyEnd = addDays(biWeeklyStart, 13);
+  const week1Start = biWeeklyStart;
+  const week1End = addDays(week1Start, 6);
+  const week2Start = addDays(biWeeklyStart, 7);
+  const week2End = addDays(week2Start, 6);
   const greeting = currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
   
   const [showShiftsModal, setShowShiftsModal] = useState(false);
@@ -37,11 +69,14 @@ export function ManagerDashboard({ onNavigate }: Props) {
   const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
   
   // Shift management state
-  const [shifts, setShifts] = useState<Shift[]>([
-    { employee: 'Alex Rodriguez', role: 'Server', startTime: '11:00', endTime: '17:00', date: '2025-12-04' },
-    { employee: 'Sarah Chen', role: 'Server', startTime: '16:00', endTime: '22:00', date: '2025-12-04' },
-    { employee: 'Jordan Lee', role: 'Host', startTime: '17:00', endTime: '23:00', date: '2025-12-04' },
-  ]);
+  const [shifts, setShifts] = useState<Shift[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [punches, setPunches] = useState<Punch[]>([]);
+  const [tips, setTips] = useState<{ _id: string; amount: number; date: string; notes?: string }[]>([]);
+  const [tipAmount, setTipAmount] = useState<string>('');
+  const [tipNotes, setTipNotes] = useState<string>('');
+  const [loading, setLoading] = useState(false);
+  const onHolidayEmployees: Employee[] = [];
   
   // Create shift form state
   const [newShift, setNewShift] = useState({
@@ -52,22 +87,6 @@ export function ManagerDashboard({ onNavigate }: Props) {
     date: ''
   });
 
-  const [activeEmployees, setActiveEmployees] = useState([
-    { name: 'Alex Rodriguez', role: 'Server', status: 'active' },
-    { name: 'Sarah Chen', role: 'Server', status: 'active' },
-    { name: 'Jordan Lee', role: 'Host', status: 'active' },
-    { name: 'Taylor Kim', role: 'Bartender', status: 'active' },
-    { name: 'Morgan Davis', role: 'Server', status: 'active' },
-    { name: 'Casey Brown', role: 'Host', status: 'active' },
-    { name: 'Riley Martinez', role: 'Server', status: 'active' },
-    { name: 'Jamie Wilson', role: 'Host', status: 'active' },
-  ]);
-
-  const onHolidayEmployees = [
-    { name: 'Sam Parker', role: 'Server', holidayDates: 'Dec 5–9' },
-    { name: 'Chris Anderson', role: 'Bartender', holidayDates: 'Dec 10–14' },
-  ];
-
   const swapRequests = [
     { id: 1, employee: 'Alex Rodriguez', shift: 'Wed · 4–10 PM', role: 'Server', reason: 'Have a final exam', type: 'swap' },
     { id: 2, employee: 'Sarah Chen', shift: 'Thu · 5–11 PM', role: 'Server', reason: 'Family emergency', type: 'swap' },
@@ -76,15 +95,29 @@ export function ManagerDashboard({ onNavigate }: Props) {
     { id: 5, employee: 'Morgan Davis', shift: 'Sun · 12 PM–6 PM', role: 'Server', reason: 'Sick leave', type: 'leave' },
   ];
 
-  // Live employee time clock status
-  const liveEmployeeStatus = [
-    { name: 'Alex Rodriguez', role: 'Server', status: 'working', punchInTime: '11:00 AM', currentDuration: '2h 15m', avatar: 'AR' },
-    { name: 'Sarah Chen', role: 'Server', status: 'working', punchInTime: '10:30 AM', currentDuration: '2h 45m', avatar: 'SC' },
-    { name: 'Jordan Lee', role: 'Host', status: 'break', punchInTime: '11:15 AM', breakStart: '1:00 PM', currentDuration: '15m break', avatar: 'JL' },
-    { name: 'Taylor Kim', role: 'Bartender', status: 'working', punchInTime: '12:00 PM', currentDuration: '1h 15m', avatar: 'TK' },
-    { name: 'Morgan Davis', role: 'Server', status: 'punched_out', punchInTime: '8:00 AM', punchOutTime: '12:00 PM', totalHours: '4h', avatar: 'MD' },
-    { name: 'Casey Brown', role: 'Host', status: 'punched_out', punchInTime: '9:00 AM', punchOutTime: '1:00 PM', totalHours: '4h', avatar: 'CB' },
-  ];
+  const liveEmployeeStatus = employees.map((emp) => {
+    const openPunch = punches.find((p) => p.employeeId === emp._id && !p.clockOut);
+    const lastBreak = openPunch?.breaks?.[openPunch.breaks.length - 1];
+    const durationMinutes = openPunch ? Math.max(0, (Date.now() - new Date(openPunch.clockIn).getTime()) / 60000) : 0;
+    const status = openPunch
+      ? lastBreak && !lastBreak.end
+        ? 'break'
+        : 'working'
+      : 'punched_out';
+    return {
+      name: emp.name,
+      role: emp.role,
+      status,
+      punchInTime: openPunch ? new Date(openPunch.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+      breakStart: lastBreak?.start ? new Date(lastBreak.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+      punchOutTime: openPunch?.clockOut,
+      totalHours: '',
+      avatar: emp.name.split(' ').map((n) => n[0]).join(''),
+      currentDuration: openPunch ? `${Math.floor(durationMinutes / 60)}h ${Math.floor(durationMinutes % 60)}m` : '',
+    };
+  });
+
+  const todaysShifts = shifts.filter(shift => shift.date === todayIso);
 
   const handleApproveRequest = (employeeName: string, type: string) => {
     setConfirmationMessage(`${type === 'swap' ? 'Swap' : 'Leave'} request from ${employeeName} has been approved!`);
@@ -97,7 +130,19 @@ export function ManagerDashboard({ onNavigate }: Props) {
   };
 
   const handleCreateShift = () => {
-    setShifts([...shifts, newShift]);
+    const { employee, role, startTime, endTime, date } = newShift;
+    const duration = calculateShiftDurationHours(startTime, endTime);
+
+    if (!employee || !role || !startTime || !endTime || !date || duration <= 0) {
+      setConfirmationMessage('Please complete all fields and ensure end time is after start time.');
+      setTimeout(() => setConfirmationMessage(null), 3000);
+      return;
+    }
+
+    const emp = employees.find(e => e.name === employee);
+    api.createShift({ ...newShift, employeeId: emp?._id, durationHours: duration }, user.token)
+      .then((created: any) => setShifts([...shifts, created]))
+      .catch((err) => setConfirmationMessage(err.message));
     setNewShift({ employee: '', role: '', startTime: '', endTime: '', date: '' });
     setShowCreateShiftModal(false);
   };
@@ -113,16 +158,61 @@ export function ManagerDashboard({ onNavigate }: Props) {
     setShowDayScheduleModal(true);
   };
 
-  const handleRemoveEmployee = (employeeName: string) => {
-    setActiveEmployees(activeEmployees.filter(emp => emp.name !== employeeName));
-    setConfirmationMessage(`${employeeName} has been removed from the team.`);
+  const handleRemoveEmployee = (employeeId: string, employeeName: string) => {
+    api.deleteEmployee(employeeId, user.token)
+      .then(() => {
+        setEmployees(employees.filter(emp => emp._id !== employeeId));
+        setConfirmationMessage(`${employeeName} has been removed from the team.`);
+      })
+      .catch((err) => setConfirmationMessage(err.message));
     setTimeout(() => setConfirmationMessage(null), 3000);
   };
+
+  const handleAddTip = async () => {
+    const amount = parseFloat(tipAmount);
+    if (Number.isNaN(amount) || amount <= 0) {
+      setConfirmationMessage('Enter a valid tip amount.');
+      return;
+    }
+    try {
+      const created = await api.createTip({ amount, date: todayIso, notes: tipNotes }, user.token);
+      setTips([...tips, created]);
+      setTipAmount('');
+      setTipNotes('');
+      setConfirmationMessage('Tips pool updated.');
+    } catch (err: any) {
+      setConfirmationMessage(err.message);
+    }
+    setTimeout(() => setConfirmationMessage(null), 3000);
+  };
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setLoading(true);
+        const [empList, shiftList, punchList, tipList] = await Promise.all([
+          api.getEmployees(user.token),
+          api.getShifts({ start: toISODate(week1Start), end: toISODate(week2End) }, user.token),
+          api.getPunches({}, user.token),
+          api.getTips(todayIso, user.token),
+        ]);
+        setEmployees(empList as Employee[]);
+        setShifts(shiftList as Shift[]);
+        setPunches(punchList as Punch[]);
+        setTips(tipList as any[]);
+      } catch (err: any) {
+        setConfirmationMessage(err.message || 'Failed to load data.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [user.token, week1Start, week2End, todayIso]);
 
   return (
     <div className="min-h-screen">
       {showScheduleBuilder ? (
-        <ScheduleBuilder onClose={() => setShowScheduleBuilder(false)} />
+        <ScheduleBuilder token={user.token} onClose={() => setShowScheduleBuilder(false)} />
       ) : (
         <>
       {/* Navbar */}
@@ -156,7 +246,7 @@ export function ManagerDashboard({ onNavigate }: Props) {
             </button>
             <Button 
               variant="ghost" 
-              onClick={() => onNavigate('landing')}
+              onClick={onLogout}
               className="hidden sm:inline-flex"
             >
               Log out
@@ -169,7 +259,7 @@ export function ManagerDashboard({ onNavigate }: Props) {
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
         {/* Header */}
         <div className="space-y-2">
-          <h1 className="text-4xl">{greeting}, Prabesh.</h1>
+          <h1 className="text-4xl">{greeting}, {user.name || 'Manager'}.</h1>
           <p className="text-gray-600">Here's what's happening with your team today.</p>
         </div>
 
@@ -183,7 +273,7 @@ export function ManagerDashboard({ onNavigate }: Props) {
               <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
                 <Calendar className="w-5 h-5 text-blue-600" />
               </div>
-              <span className="text-3xl">12</span>
+              <span className="text-3xl">{shifts.filter(s => s.date === todayIso).length}</span>
             </div>
             <div className="text-gray-600">Shifts today</div>
             <div className="text-sm text-[#2563EB] mt-2">View all →</div>
@@ -197,7 +287,7 @@ export function ManagerDashboard({ onNavigate }: Props) {
               <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center">
                 <Users className="w-5 h-5 text-green-600" />
               </div>
-              <span className="text-3xl">8</span>
+              <span className="text-3xl">{employees.length}</span>
             </div>
             <div className="text-gray-600">Active employees</div>
             <div className="text-sm text-[#22C55E] mt-2">View all →</div>
@@ -225,7 +315,9 @@ export function ManagerDashboard({ onNavigate }: Props) {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl">Bi-weekly schedule</h2>
-                <p className="text-xs text-gray-500 mt-1">Dec 2 – Dec 15</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {formatMonthDay(biWeeklyStart)} – {formatMonthDay(biWeeklyEnd)}
+                </p>
               </div>
               <Button 
                 size="sm" 
@@ -239,42 +331,56 @@ export function ManagerDashboard({ onNavigate }: Props) {
 
             <div className="space-y-3">
               <div>
-                <div className="text-xs text-gray-500 mb-2">Week 1 (Dec 2-8)</div>
+                <div className="text-xs text-gray-500 mb-2">
+                  Week 1 ({formatMonthDay(week1Start)}-{formatMonthDay(week1End)})
+                </div>
                 <div className="grid grid-cols-7 gap-2">
-                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
-                    <div 
-                      key={`w1-${day}`}
-                      className={`rounded-xl p-2 text-center cursor-pointer hover:border-blue-300 transition-colors ${
-                        index === 2 ? 'bg-blue-100 border-2 border-blue-300' : 'bg-gray-50 border border-gray-200'
-                      }`}
-                      onClick={() => handleDaySchedule(day, `2025-12-${2 + index < 10 ? '0' + (2 + index) : 2 + index}`, 'Week 1')}
-                    >
-                      <div className="text-xs text-gray-500 mb-1">{day}</div>
-                      <div className={`${index === 2 ? 'text-blue-700' : ''}`}>
-                        {[4, 5, 6, 5, 7, 8, 6][index]}
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => {
+                    const dateIso = toISODate(addDays(week1Start, index));
+                    const isToday = dateIso === todayIso;
+                    return (
+                      <div 
+                        key={`w1-${day}`}
+                        className={`rounded-xl p-2 text-center cursor-pointer hover:border-blue-300 transition-colors ${
+                          isToday ? 'bg-blue-100 border-2 border-blue-300' : 'bg-gray-50 border border-gray-200'
+                        }`}
+                        onClick={() => handleDaySchedule(day, dateIso, 'Week 1')}
+                      >
+                        <div className="text-xs text-gray-500 mb-1">{day}</div>
+                        <div className={`${isToday ? 'text-blue-700' : ''}`}>
+                          {[4, 5, 6, 5, 7, 8, 6][index]}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">shifts</div>
                       </div>
-                      <div className="text-xs text-gray-500 mt-1">shifts</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
               <div>
-                <div className="text-xs text-gray-500 mb-2">Week 2 (Dec 9-15)</div>
+                <div className="text-xs text-gray-500 mb-2">
+                  Week 2 ({formatMonthDay(week2Start)}-{formatMonthDay(week2End)})
+                </div>
                 <div className="grid grid-cols-7 gap-2">
-                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
-                    <div 
-                      key={`w2-${day}`}
-                      className="rounded-xl p-2 text-center bg-gray-50 border border-dashed border-gray-300 cursor-pointer hover:border-blue-300 transition-colors"
-                      onClick={() => handleDaySchedule(day, `2025-12-${9 + index}`, 'Week 2')}
-                    >
-                      <div className="text-xs text-gray-500 mb-1">{day}</div>
-                      <div className="text-gray-400">
-                        {[5, 6, 4, 6, 8, 9, 7][index]}
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => {
+                    const dateIso = toISODate(addDays(week2Start, index));
+                    const isToday = dateIso === todayIso;
+                    return (
+                      <div 
+                        key={`w2-${day}`}
+                        className={`rounded-xl p-2 text-center cursor-pointer hover:border-blue-300 transition-colors ${
+                          isToday ? 'bg-blue-100 border-2 border-blue-300 text-blue-700' : 'bg-gray-50 border border-dashed border-gray-300'
+                        }`}
+                        onClick={() => handleDaySchedule(day, dateIso, 'Week 2')}
+                      >
+                        <div className="text-xs text-gray-500 mb-1">{day}</div>
+                        <div className={`${isToday ? 'text-blue-700' : 'text-gray-400'}`}>
+                          {[5, 6, 4, 6, 8, 9, 7][index]}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">shifts</div>
                       </div>
-                      <div className="text-xs text-gray-500 mt-1">shifts</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -432,8 +538,51 @@ export function ManagerDashboard({ onNavigate }: Props) {
           </div>
         </div>
 
+        {/* Time Punches */}
+        <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl">Time punches</h2>
+              <p className="text-xs text-gray-500 mt-1">Clock in/out and breaks (live from DB)</p>
+            </div>
+            <Badge variant="secondary" className="rounded-full">{punches.length} records</Badge>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500">
+                  <th className="py-2 pr-4">Employee</th>
+                  <th className="py-2 pr-4">Clock in</th>
+                  <th className="py-2 pr-4">Clock out</th>
+                  <th className="py-2 pr-4">Breaks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {punches.slice(0, 10).map((punch) => (
+                  <tr key={punch._id} className="border-t border-gray-200">
+                    <td className="py-2 pr-4">{punch.employeeName}</td>
+                    <td className="py-2 pr-4">{new Date(punch.clockIn).toLocaleString()}</td>
+                    <td className="py-2 pr-4">{punch.clockOut ? new Date(punch.clockOut).toLocaleString() : '—'}</td>
+                    <td className="py-2 pr-4">
+                      {punch.breaks && punch.breaks.length
+                        ? punch.breaks.map((b: any, idx: number) => (
+                            <span key={idx} className="mr-2">
+                              {new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-
+                              {b.end ? new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '…'}
+                            </span>
+                          ))
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {/* Bottom Two Column Layout */}
-        <div className="grid lg:grid-cols-2 gap-6">
+        <div className="grid lg:grid-cols-3 gap-6">
           {/* Quick actions */}
           <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
             <h2 className="text-xl mb-2">Quick actions</h2>
@@ -491,6 +640,51 @@ export function ManagerDashboard({ onNavigate }: Props) {
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
+
+          {/* Tips Pool */}
+          <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
+            <h2 className="text-xl">Tips pool (today)</h2>
+            <div className="space-y-3">
+              <div className="flex gap-3">
+                <Input
+                  type="number"
+                  min="0"
+                  placeholder="Amount"
+                  value={tipAmount}
+                  onChange={(e) => setTipAmount(e.target.value)}
+                  className="rounded-xl"
+                />
+                <Button className="rounded-xl bg-[#2563EB]" onClick={handleAddTip}>
+                  Add
+                </Button>
+              </div>
+              <Input
+                placeholder="Notes (optional)"
+                value={tipNotes}
+                onChange={(e) => setTipNotes(e.target.value)}
+                className="rounded-xl"
+              />
+              <div className="text-sm text-gray-600">
+                {tips.filter(t => t.date === todayIso).length} entries • $
+                {tips
+                  .filter(t => t.date === todayIso)
+                  .reduce((sum, t) => sum + Number(t.amount || 0), 0)
+                  .toFixed(2)}
+              </div>
+              <div className="space-y-2 max-h-36 overflow-y-auto">
+                {tips
+                  .filter(t => t.date === todayIso)
+                  .slice(-5)
+                  .reverse()
+                  .map((tip) => (
+                    <div key={tip._id} className="flex items-center justify-between text-sm border rounded-lg px-3 py-2">
+                      <span>${Number(tip.amount).toFixed(2)}</span>
+                      <span className="text-gray-500">{tip.notes || 'No notes'}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
         </div>
       </main>
 
@@ -512,30 +706,39 @@ export function ManagerDashboard({ onNavigate }: Props) {
           <DialogHeader>
             <DialogTitle className="text-2xl">Shifts Today</DialogTitle>
             <DialogDescription>
-              All scheduled shifts for today, Wednesday, December 4, 2025
+              All scheduled shifts for today, {todayLabel}
             </DialogDescription>
           </DialogHeader>
           
           <div className="space-y-3 mt-4">
-            {shifts.map((shift, index) => (
-              <div key={index} className="p-4 rounded-xl border border-gray-200 bg-gray-50">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white">
-                      {shift.employee.split(' ').map(n => n[0]).join('')}
-                    </div>
-                    <div>
-                      <div className="font-medium">{shift.employee}</div>
-                      <div className="text-sm text-gray-600">{shift.startTime}–{shift.endTime}</div>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <Badge variant="secondary" className="mb-1">{shift.role}</Badge>
-                    <div className="text-sm text-gray-600">{shift.endTime.split(':')[0] - shift.startTime.split(':')[0]} hours</div>
-                  </div>
-                </div>
+            {todaysShifts.length === 0 ? (
+              <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-600">
+                No shifts scheduled for today.
               </div>
-            ))}
+            ) : (
+              todaysShifts.map((shift, index) => {
+                const duration = calculateShiftDurationHours(shift.startTime, shift.endTime);
+                return (
+                  <div key={index} className="p-4 rounded-xl border border-gray-200 bg-gray-50">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white">
+                          {shift.employee.split(' ').map(n => n[0]).join('')}
+                        </div>
+                        <div>
+                          <div className="font-medium">{shift.employee}</div>
+                          <div className="text-sm text-gray-600">{shift.startTime}–{shift.endTime}</div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <Badge variant="secondary" className="mb-1">{shift.role}</Badge>
+                        <div className="text-sm text-gray-600">{formatHours(duration)} hours</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -554,11 +757,11 @@ export function ManagerDashboard({ onNavigate }: Props) {
             <div>
               <h3 className="font-medium mb-3 flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-[#22C55E]" />
-                Active Employees ({activeEmployees.length})
+                Active Employees ({employees.length})
               </h3>
               <div className="space-y-2">
-                {activeEmployees.map((employee, index) => (
-                  <div key={index} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-red-200 transition-colors">
+                {employees.map((employee, index) => (
+                  <div key={employee._id || index} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-red-200 transition-colors">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white">
                         {employee.name.split(' ').map(n => n[0]).join('')}
@@ -574,7 +777,7 @@ export function ManagerDashboard({ onNavigate }: Props) {
                         size="sm"
                         variant="ghost"
                         className="opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 hover:text-red-600"
-                        onClick={() => handleRemoveEmployee(employee.name)}
+                        onClick={() => handleRemoveEmployee(employee._id, employee.name)}
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -696,8 +899,8 @@ export function ManagerDashboard({ onNavigate }: Props) {
                   <SelectValue placeholder="Select an employee" />
                 </SelectTrigger>
                 <SelectContent>
-                  {activeEmployees.map((employee) => (
-                    <SelectItem key={employee.name} value={employee.name}>
+                  {employees.map((employee) => (
+                    <SelectItem key={employee._id} value={employee.name}>
                       {employee.name}
                     </SelectItem>
                   ))}
@@ -812,7 +1015,9 @@ export function ManagerDashboard({ onNavigate }: Props) {
                   </div>
                   <div className="text-right">
                     <Badge variant="secondary" className="mb-1">{shift.role}</Badge>
-                    <div className="text-sm text-gray-600">{shift.endTime.split(':')[0] - shift.startTime.split(':')[0]} hours</div>
+                    <div className="text-sm text-gray-600">
+                      {formatHours(calculateShiftDurationHours(shift.startTime, shift.endTime))} hours
+                    </div>
                   </div>
                 </div>
               </div>

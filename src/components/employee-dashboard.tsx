@@ -5,15 +5,19 @@ import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Label } from './ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../api/client';
+import { calculateShiftDurationHours, formatHours, toISODate } from '../utils/time';
 
 type Props = {
   onNavigate: (page: string) => void;
+  onLogout: () => void;
+  user: { id: string; name: string; token: string };
 };
 
 type PunchStatus = 'not-punched-in' | 'punched-in' | 'on-break';
 
-export function EmployeeDashboard({ onNavigate }: Props) {
+export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const [swapRequestSent, setSwapRequestSent] = useState(false);
   const [punchStatus, setPunchStatus] = useState<PunchStatus>('not-punched-in');
   const [showPunchInModal, setShowPunchInModal] = useState(false);
@@ -23,32 +27,70 @@ export function EmployeeDashboard({ onNavigate }: Props) {
   const [showPaymentHistoryModal, setShowPaymentHistoryModal] = useState(false);
   const [punchInTime, setPunchInTime] = useState<string>('');
   const [breakStartTime, setBreakStartTime] = useState<string>('');
+  const todayIso = toISODate(new Date());
 
-  const handlePunchIn = () => {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    setPunchInTime(timeString);
-    setPunchStatus('punched-in');
-    setShowPunchInModal(false);
+  const deriveStatusFromPunches = (records: any[]): PunchStatus => {
+    if (!records.length) return 'not-punched-in';
+    const latest = records[records.length - 1];
+    if (latest.breaks && latest.breaks.length) {
+      const lastBreak = latest.breaks[latest.breaks.length - 1];
+      if (lastBreak && !lastBreak.end) return 'on-break';
+    }
+    if (latest.clockIn && !latest.clockOut) return 'punched-in';
+    return 'not-punched-in';
   };
 
-  const handlePunchOut = () => {
+  const refreshData = async () => {
+    try {
+      setLoading(true);
+      const [shiftRes, punchRes] = await Promise.all([
+        api.getShifts({ employeeId: user.id }, user.token),
+        api.getPunches({ employeeId: user.id }, user.token),
+      ]);
+      setShifts(shiftRes as any[]);
+      setPunches(punchRes as any[]);
+      setPunchStatus(deriveStatusFromPunches(punchRes as any[]));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshData();
+  }, [user.id, user.token]);
+  const [shifts, setShifts] = useState<any[]>([]);
+  const [punches, setPunches] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const handlePunchIn = async () => {
+    await api.clockIn({ employeeId: user.id }, user.token);
+    setPunchStatus('punched-in');
+    setPunchInTime(new Date().toLocaleTimeString());
+    setShowPunchInModal(false);
+    refreshData();
+  };
+
+  const handlePunchOut = async () => {
+    await api.clockOut({ employeeId: user.id }, user.token);
     setPunchStatus('not-punched-in');
     setPunchInTime('');
     setShowPunchOutModal(false);
+    refreshData();
   };
 
-  const handleStartBreak = () => {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    setBreakStartTime(timeString);
+  const handleStartBreak = async () => {
+    await api.breakStart({ employeeId: user.id }, user.token);
+    setBreakStartTime(new Date().toLocaleTimeString());
     setPunchStatus('on-break');
     setShowBreakModal(false);
+    refreshData();
   };
 
-  const handleEndBreak = () => {
+  const handleEndBreak = async () => {
+    await api.breakEnd({ employeeId: user.id }, user.token);
     setPunchStatus('punched-in');
     setBreakStartTime('');
+    refreshData();
   };
 
   const getCurrentShift = () => {
@@ -78,11 +120,11 @@ export function EmployeeDashboard({ onNavigate }: Props) {
 
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white">
-              E
+              {user.name ? user.name[0] : 'E'}
             </div>
             <Button 
               variant="ghost" 
-              onClick={() => onNavigate('landing')}
+              onClick={onLogout}
               className="hidden sm:inline-flex"
             >
               Log out
@@ -109,73 +151,33 @@ export function EmployeeDashboard({ onNavigate }: Props) {
             </div>
 
             <div className="space-y-3">
-              <div className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50/50">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Calendar className="w-4 h-4 text-blue-600" />
-                      <span className="font-medium">Wednesday</span>
+              {shifts.filter(s => s.date >= todayIso).slice(0,4).map((shift, idx) => {
+                const duration = calculateShiftDurationHours(shift.startTime, shift.endTime);
+                const dateLabel = new Date(shift.date).toLocaleDateString('en-US', { weekday: 'long' });
+                return (
+                  <div key={shift._id || idx} className={`p-4 rounded-xl border ${idx === 0 ? 'border-2 border-blue-200 bg-blue-50/50' : 'border-gray-200'}`}>
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <Calendar className="w-4 h-4 text-blue-600" />
+                          <span className="font-medium">{dateLabel}</span>
+                        </div>
+                        <div className="text-gray-600">{shift.startTime} – {shift.endTime}</div>
+                      </div>
+                      <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
                     </div>
-                    <div className="text-gray-600">4:00 PM – 10:00 PM</div>
-                  </div>
-                  <Badge className="bg-blue-600 hover:bg-blue-600">Server</Badge>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours</span>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border border-gray-200">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Calendar className="w-4 h-4 text-gray-600" />
-                      <span className="font-medium">Friday</span>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Clock className="w-4 h-4" />
+                      <span>{formatHours(duration)} hours</span>
                     </div>
-                    <div className="text-gray-600">5:00 PM – 11:00 PM</div>
                   </div>
-                  <Badge variant="secondary">Host</Badge>
+                );
+              })}
+              {shifts.filter(s => s.date >= todayIso).length === 0 && (
+                <div className="p-4 rounded-xl border border-dashed border-gray-300 text-sm text-gray-600">
+                  No scheduled shifts yet.
                 </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours</span>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border border-gray-200">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Calendar className="w-4 h-4 text-gray-600" />
-                      <span className="font-medium">Saturday</span>
-                    </div>
-                    <div className="text-gray-600">11:00 AM – 5:00 PM</div>
-                  </div>
-                  <Badge className="bg-blue-600 hover:bg-blue-600">Server</Badge>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours</span>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border border-gray-200">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Calendar className="w-4 h-4 text-gray-600" />
-                      <span className="font-medium">Sunday</span>
-                    </div>
-                    <div className="text-gray-600">12:00 PM – 6:00 PM</div>
-                  </div>
-                  <Badge className="bg-blue-600 hover:bg-blue-600">Server</Badge>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours</span>
-                </div>
-              </div>
+              )}
             </div>
           </div>
 
@@ -819,62 +821,28 @@ export function EmployeeDashboard({ onNavigate }: Props) {
             </DialogHeader>
 
             <div className="space-y-4 mt-4">
-              {/* Shift Details */}
-              <div className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <div className="font-medium text-lg">Wednesday</div>
-                    <div className="text-sm text-gray-600">4:00 PM – 10:00 PM</div>
+              {shifts.map((shift, idx) => {
+                const duration = calculateShiftDurationHours(shift.startTime, shift.endTime);
+                const dayLabel = new Date(shift.date).toLocaleDateString('en-US', { weekday: 'long' });
+                return (
+                  <div key={shift._id || idx} className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <div className="font-medium text-lg">{dayLabel}</div>
+                        <div className="text-sm text-gray-600">{shift.startTime} – {shift.endTime}</div>
+                      </div>
+                      <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Clock className="w-4 h-4" />
+                      <span>{formatHours(duration)} hours scheduled</span>
+                    </div>
                   </div>
-                  <Badge className="bg-blue-600 hover:bg-blue-600">Server</Badge>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours scheduled</span>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <div className="font-medium text-lg">Friday</div>
-                    <div className="text-sm text-gray-600">5:00 PM – 11:00 PM</div>
-                  </div>
-                  <Badge variant="secondary">Host</Badge>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours scheduled</span>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <div className="font-medium text-lg">Saturday</div>
-                    <div className="text-sm text-gray-600">11:00 AM – 5:00 PM</div>
-                  </div>
-                  <Badge className="bg-blue-600 hover:bg-blue-600">Server</Badge>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours scheduled</span>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <div className="font-medium text-lg">Sunday</div>
-                    <div className="text-sm text-gray-600">12:00 PM – 6:00 PM</div>
-                  </div>
-                  <Badge className="bg-blue-600 hover:bg-blue-600">Server</Badge>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  <span>6 hours scheduled</span>
-                </div>
-              </div>
+                );
+              })}
+              {shifts.length === 0 && (
+                <div className="text-sm text-gray-600">No shifts scheduled.</div>
+              )}
             </div>
 
             <div className="flex gap-3 mt-6">

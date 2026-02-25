@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronLeft, ChevronRight, X, Plus, Users, Calendar, Clock } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { ChevronLeft, ChevronRight, X, Plus, Users, Calendar } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
@@ -7,9 +7,13 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Label } from './ui/label';
 import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { addDays, calculateShiftDurationHours, formatHours, formatMonthDay, startOfWeek, toISODate } from '../utils/time';
+import { api } from '../api/client';
+import { useEffect } from 'react';
 
 type Props = {
   onClose: () => void;
+  token: string;
 };
 
 type ShiftBlock = {
@@ -20,40 +24,55 @@ type ShiftBlock = {
   role: string;
 };
 
-export function ScheduleBuilder({ onClose }: Props) {
-  const [currentWeekStart, setCurrentWeekStart] = useState('Nov 18');
-  const [currentWeekEnd, setCurrentWeekEnd] = useState('Dec 1');
+export function ScheduleBuilder({ onClose, token }: Props) {
+  const initialWeekStart = startOfWeek(new Date());
+  const todayIso = toISODate(new Date());
+
+  const [weekAnchorDate, setWeekAnchorDate] = useState<Date>(initialWeekStart);
   const [showAddShiftModal, setShowAddShiftModal] = useState(false);
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [selectedCell, setSelectedCell] = useState<{ employee: string; date: string; role: string } | null>(null);
-  const [shifts, setShifts] = useState<ShiftBlock[]>([
-    { employeeName: 'Alex Rodriguez', date: '2025-11-20', startTime: '11:00', endTime: '17:00', role: 'Server' },
-    { employeeName: 'Sarah Chen', date: '2025-11-20', startTime: '16:00', endTime: '22:00', role: 'Server' },
-    { employeeName: 'Jordan Lee', date: '2025-11-21', startTime: '17:00', endTime: '23:00', role: 'Host' },
-    { employeeName: 'Taylor Kim', date: '2025-11-22', startTime: '18:00', endTime: '24:00', role: 'Bartender' },
-  ]);
+  const [shifts, setShifts] = useState<ShiftBlock[]>([]);
 
   const [newShift, setNewShift] = useState({
     startTime: '',
     endTime: '',
   });
 
-  const weekDays = [
-    { day: 'Mon', date: 'Nov 18', fullDate: '2025-11-18' },
-    { day: 'Tue', date: 'Nov 19', fullDate: '2025-11-19' },
-    { day: 'Wed', date: 'Nov 20', fullDate: '2025-11-20' },
-    { day: 'Thu', date: 'Nov 21', fullDate: '2025-11-21' },
-    { day: 'Fri', date: 'Nov 22', fullDate: '2025-11-22' },
-    { day: 'Sat', date: 'Nov 23', fullDate: '2025-11-23' },
-    { day: 'Sun', date: 'Nov 24', fullDate: '2025-11-24' },
-    { day: 'Mon', date: 'Nov 25', fullDate: '2025-11-25' },
-    { day: 'Tue', date: 'Nov 26', fullDate: '2025-11-26' },
-    { day: 'Wed', date: 'Nov 27', fullDate: '2025-11-27' },
-    { day: 'Thu', date: 'Nov 28', fullDate: '2025-11-28' },
-    { day: 'Fri', date: 'Nov 29', fullDate: '2025-11-29' },
-    { day: 'Sat', date: 'Nov 30', fullDate: '2025-11-30' },
-    { day: 'Sun', date: 'Dec 1', fullDate: '2025-12-01' },
-  ];
+  const generateWeekDays = (anchor: Date) => (
+    Array.from({ length: 14 }, (_, index) => {
+      const date = addDays(anchor, index);
+      return {
+        day: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        date: formatMonthDay(date),
+        fullDate: toISODate(date),
+        dateObj: date,
+      };
+    })
+  );
+
+  const weekDays = useMemo(() => generateWeekDays(weekAnchorDate), [weekAnchorDate]);
+  const rangeStartDate = weekDays[0]?.dateObj ?? weekAnchorDate;
+  const rangeEndDate = weekDays[weekDays.length - 1]?.dateObj ?? weekAnchorDate;
+  const headerYear =
+    rangeStartDate.getFullYear() === rangeEndDate.getFullYear()
+      ? rangeEndDate.getFullYear().toString()
+      : `${rangeStartDate.getFullYear()} – ${rangeEndDate.getFullYear()}`;
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const fetched = await api.getShifts(
+          { start: toISODate(rangeStartDate), end: toISODate(rangeEndDate) },
+          token
+        );
+        setShifts(fetched as ShiftBlock[]);
+      } catch {
+        // ignore fetch errors for offline demo
+      }
+    };
+    load();
+  }, [token, rangeStartDate, rangeEndDate]);
 
   const departments = [
     {
@@ -101,40 +120,63 @@ export function ScheduleBuilder({ onClose }: Props) {
     setShowAddShiftModal(true);
   };
 
+  const handlePreviousWeek = () => setWeekAnchorDate((prev) => addDays(prev, -7));
+  const handleNextWeek = () => setWeekAnchorDate((prev) => addDays(prev, 7));
+  const handleJumpToToday = () => setWeekAnchorDate(startOfWeek(new Date()));
+
   const handleAddShift = () => {
-    if (selectedCell && newShift.startTime && newShift.endTime) {
-      const shift: ShiftBlock = {
-        employeeName: selectedCell.employee,
-        date: selectedCell.date,
-        startTime: newShift.startTime,
-        endTime: newShift.endTime,
-        role: selectedCell.role,
-      };
-      setShifts([...shifts, shift]);
-      setNewShift({ startTime: '', endTime: '' });
-      setShowAddShiftModal(false);
-    }
+    if (!selectedCell || !newShift.startTime || !newShift.endTime) return;
+
+    const duration = calculateShiftDurationHours(newShift.startTime, newShift.endTime);
+    if (duration <= 0) return;
+
+    const shift: ShiftBlock = {
+      employeeName: selectedCell.employee,
+      date: selectedCell.date,
+      startTime: newShift.startTime,
+      endTime: newShift.endTime,
+      role: selectedCell.role,
+    };
+    api.createShift(
+      {
+        employee: shift.employeeName,
+        role: shift.role,
+        startTime: shift.startTime,
+        endTime: shift.endTime,
+        date: shift.date,
+        durationHours: duration,
+      },
+      token
+    ).then((created: any) => {
+      setShifts([...shifts, { ...shift, ...created }]);
+    }).catch(() => {
+      setShifts([...shifts, shift]); // fallback to local add
+    });
+    setNewShift({ startTime: '', endTime: '' });
+    setShowAddShiftModal(false);
   };
 
-  const handleDeleteShift = (index: number) => {
-    setShifts(shifts.filter((_, i) => i !== index));
+  const handleDeleteShift = (id?: string, index?: number) => {
+    if (id) {
+      api.deleteShift(id, token).catch(() => {});
+    }
+    setShifts(shifts.filter((shift, i) => (id ? (shift as any)._id !== id : i !== index)));
   };
 
   const getShiftsForCell = (employeeName: string, date: string) => {
     return shifts.filter(s => s.employeeName === employeeName && s.date === date);
   };
 
-  const calculateHours = (startTime: string, endTime: string) => {
-    const start = parseInt(startTime.split(':')[0]);
-    const end = parseInt(endTime.split(':')[0]);
-    return end > start ? end - start : (24 - start) + end;
-  };
-
   const getTotalHours = (employeeName: string) => {
     return shifts
       .filter(s => s.employeeName === employeeName)
-      .reduce((total, shift) => total + calculateHours(shift.startTime, shift.endTime), 0);
+      .reduce((total, shift) => total + calculateShiftDurationHours(shift.startTime, shift.endTime), 0);
   };
+
+  const addShiftDisabled =
+    !newShift.startTime ||
+    !newShift.endTime ||
+    calculateShiftDurationHours(newShift.startTime, newShift.endTime) <= 0;
 
   return (
     <div className="fixed inset-0 bg-white z-50 overflow-hidden flex flex-col">
@@ -168,17 +210,25 @@ export function ScheduleBuilder({ onClose }: Props) {
         {/* Date Navigation */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <button className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center">
+            <button
+              onClick={handlePreviousWeek}
+              className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center"
+            >
               <ChevronLeft className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-2">
               <Calendar className="w-4 h-4 text-gray-400" />
-              <span className="font-medium">{currentWeekStart} – {currentWeekEnd}, 2025</span>
+              <span className="font-medium">
+                {formatMonthDay(rangeStartDate)} – {formatMonthDay(rangeEndDate)}, {headerYear}
+              </span>
             </div>
-            <button className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center">
+            <button
+              onClick={handleNextWeek}
+              className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center"
+            >
               <ChevronRight className="w-5 h-5" />
             </button>
-            <Button variant="outline" size="sm" className="rounded-full">
+            <Button variant="outline" size="sm" className="rounded-full" onClick={handleJumpToToday}>
               Today
             </Button>
           </div>
@@ -210,12 +260,12 @@ export function ScheduleBuilder({ onClose }: Props) {
                   }`}
                 >
                   <div className={`text-xs text-gray-500 mb-1 ${
-                    day.fullDate === '2025-11-20' ? 'text-blue-600' : ''
+                    day.fullDate === todayIso ? 'text-blue-600' : ''
                   }`}>
                     {day.day}
                   </div>
                   <div className={`text-sm ${
-                    day.fullDate === '2025-11-20' ? 'font-medium text-blue-600' : ''
+                    day.fullDate === todayIso ? 'font-medium text-blue-600' : ''
                   }`}>
                     {day.date.split(' ')[1]}
                   </div>
@@ -242,79 +292,82 @@ export function ScheduleBuilder({ onClose }: Props) {
                   </div>
 
                   {/* Employee Rows */}
-                  {role.employees.map((employee, empIndex) => (
-                    <div
-                      key={empIndex}
-                      className="grid grid-cols-[250px_repeat(14,1fr)] gap-px bg-gray-200 hover:bg-gray-100 transition-colors"
-                    >
-                      {/* Employee Info */}
-                      <div className="bg-white p-3 flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white text-xs">
-                          {employee.avatar}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">{employee.name}</div>
-                          <div className="text-xs text-gray-500">
-                            {getTotalHours(employee.name)}h · ${getTotalHours(employee.name) * 30}
+                  {role.employees.map((employee, empIndex) => {
+                    const totalHours = getTotalHours(employee.name);
+                    return (
+                      <div
+                        key={empIndex}
+                        className="grid grid-cols-[250px_repeat(14,1fr)] gap-px bg-gray-200 hover:bg-gray-100 transition-colors"
+                      >
+                        {/* Employee Info */}
+                        <div className="bg-white p-3 flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white text-xs">
+                            {employee.avatar}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium truncate">{employee.name}</div>
+                            <div className="text-xs text-gray-500">
+                              {formatHours(totalHours)}h · ${(totalHours * 30).toFixed(2)}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Day Cells */}
-                      {weekDays.map((day, dayIndex) => {
-                        const cellShifts = getShiftsForCell(employee.name, day.fullDate);
-                        return (
-                          <div
-                            key={dayIndex}
-                            className={`bg-white p-2 min-h-[60px] cursor-pointer hover:bg-blue-50 transition-colors relative ${
-                              dayIndex === 7 ? 'border-l-2 border-blue-300' : ''
-                            }`}
-                            onClick={() => handleCellClick(employee.name, day.fullDate, role.name)}
-                          >
-                            {cellShifts.length === 0 ? (
-                              <div className="flex items-center justify-center h-full opacity-0 hover:opacity-100">
-                                <Plus className="w-4 h-4 text-gray-400" />
-                              </div>
-                            ) : (
-                              <div className="space-y-1">
-                                {cellShifts.map((shift, shiftIndex) => (
-                                  <div
-                                    key={shiftIndex}
-                                    className="relative group"
-                                  >
-                                    <div className="bg-blue-500 text-white text-xs px-2 py-1 rounded group-hover:bg-blue-600 transition-colors">
-                                      <div className="flex items-center justify-between gap-1">
-                                        <span className="truncate">
-                                          {shift.startTime.substring(0, 5)}–{shift.endTime.substring(0, 5)}
-                                        </span>
-                                        <button
-                                          onClick={(e) => {
+                        {/* Day Cells */}
+                        {weekDays.map((day, dayIndex) => {
+                          const cellShifts = getShiftsForCell(employee.name, day.fullDate);
+                          return (
+                            <div
+                              key={dayIndex}
+                              className={`bg-white p-2 min-h-[60px] cursor-pointer hover:bg-blue-50 transition-colors relative ${
+                                dayIndex === 7 ? 'border-l-2 border-blue-300' : ''
+                              }`}
+                              onClick={() => handleCellClick(employee.name, day.fullDate, role.name)}
+                            >
+                              {cellShifts.length === 0 ? (
+                                <div className="flex items-center justify-center h-full opacity-0 hover:opacity-100">
+                                  <Plus className="w-4 h-4 text-gray-400" />
+                                </div>
+                              ) : (
+                                <div className="space-y-1">
+                                  {cellShifts.map((shift, shiftIndex) => (
+                                    <div
+                                      key={shiftIndex}
+                                      className="relative group"
+                                    >
+                                      <div className="bg-blue-500 text-white text-xs px-2 py-1 rounded group-hover:bg-blue-600 transition-colors">
+                                        <div className="flex items-center justify-between gap-1">
+                                          <span className="truncate">
+                                            {shift.startTime.substring(0, 5)}–{shift.endTime.substring(0, 5)}
+                                          </span>
+                                          <button
+                                            onClick={(e) => {
                                             e.stopPropagation();
                                             const index = shifts.findIndex(
                                               s => s.employeeName === shift.employeeName &&
                                                    s.date === shift.date &&
                                                    s.startTime === shift.startTime
                                             );
-                                            handleDeleteShift(index);
+                                            handleDeleteShift((shift as any)._id, index);
                                           }}
                                           className="opacity-0 group-hover:opacity-100"
                                         >
                                           <X className="w-3 h-3" />
                                         </button>
-                                      </div>
-                                      <div className="text-xs opacity-80">
-                                        {calculateHours(shift.startTime, shift.endTime)}h
+                                        </div>
+                                        <div className="text-xs opacity-80">
+                                          {formatHours(calculateShiftDurationHours(shift.startTime, shift.endTime))}h
+                                        </div>
                                       </div>
                                     </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -329,11 +382,11 @@ export function ScheduleBuilder({ onClose }: Props) {
           {weekDays.map((day, index) => {
             const dayTotal = shifts
               .filter(s => s.date === day.fullDate)
-              .reduce((total, shift) => total + calculateHours(shift.startTime, shift.endTime), 0);
+              .reduce((total, shift) => total + calculateShiftDurationHours(shift.startTime, shift.endTime), 0);
             return (
               <div key={index} className="text-center text-sm">
-                <div className="font-medium">{dayTotal}h</div>
-                <div className="text-xs text-gray-500">${dayTotal * 30}</div>
+                <div className="font-medium">{formatHours(dayTotal)}h</div>
+                <div className="text-xs text-gray-500">${(dayTotal * 30).toFixed(2)}</div>
               </div>
             );
           })}
@@ -392,13 +445,13 @@ export function ScheduleBuilder({ onClose }: Props) {
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Duration:</span>
                   <span className="font-medium">
-                    {calculateHours(newShift.startTime, newShift.endTime)} hours
+                    {formatHours(calculateShiftDurationHours(newShift.startTime, newShift.endTime))} hours
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-gray-600">Estimated pay:</span>
                   <span className="font-medium text-[#22C55E]">
-                    ${calculateHours(newShift.startTime, newShift.endTime) * 30}
+                    ${(calculateShiftDurationHours(newShift.startTime, newShift.endTime) * 30).toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -415,7 +468,7 @@ export function ScheduleBuilder({ onClose }: Props) {
               <Button
                 className="flex-1 rounded-full bg-[#2563EB] hover:bg-[#1d4ed8]"
                 onClick={handleAddShift}
-                disabled={!newShift.startTime || !newShift.endTime}
+                disabled={addShiftDisabled}
               >
                 Add Shift
               </Button>

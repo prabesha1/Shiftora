@@ -12,25 +12,41 @@ import {
 } from './ui/table';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { formatLongDate, toISODate } from '../utils/time';
+import { api } from '../api/client';
+import { useEffect, useState } from 'react';
 
 type Props = {
   onNavigate: (page: string) => void;
+  user: { token: string };
 };
 
-export function WagesReport({ onNavigate }: Props) {
-  const employeeData = [
-    { name: 'Alex Rodriguez', role: 'Server', hours: 8, rate: 30, wages: 240, tips: 65 },
-    { name: 'Sarah Chen', role: 'Server', hours: 8, rate: 30, wages: 240, tips: 72 },
-    { name: 'Jordan Lee', role: 'Host', hours: 8, rate: 25, wages: 200, tips: 30 },
-    { name: 'Taylor Kim', role: 'Server', hours: 6, rate: 30, wages: 180, tips: 48 },
-    { name: 'Morgan Davis', role: 'Bartender', hours: 8, rate: 32, wages: 256, tips: 85 },
-    { name: 'Casey Brown', role: 'Server', hours: 6, rate: 30, wages: 180, tips: 45 },
-    { name: 'Riley Martinez', role: 'Host', hours: 6, rate: 25, wages: 150, tips: 28 },
-    { name: 'Jamie Wilson', role: 'Server', hours: 8, rate: 30, wages: 240, tips: 67 },
-  ];
+export function WagesReport({ onNavigate, user }: Props) {
+  const reportDate = new Date();
+  const reportDateLabel = formatLongDate(reportDate);
+  const reportDateISO = toISODate(reportDate);
 
-  const totalWages = employeeData.reduce((sum, emp) => sum + emp.wages, 0);
-  const totalTips = employeeData.reduce((sum, emp) => sum + emp.tips, 0);
+  const [employeeData, setEmployeeData] = useState<any[]>([]);
+  const [totalWages, setTotalWages] = useState(0);
+  const [totalTips, setTotalTips] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setLoading(true);
+        const report = await api.getDailyReport(reportDateISO, user.token);
+        setEmployeeData(report.employees || []);
+        setTotalWages(report.totalWages || 0);
+        setTotalTips(report.totalTips || 0);
+      } catch {
+        // fallback: leave empty
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [reportDateISO, user.token]);
 
   const handleExportPDF = () => {
     const doc = new jsPDF();
@@ -45,7 +61,7 @@ export function WagesReport({ onNavigate }: Props) {
     
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text('Wednesday, November 20, 2025', 14, 43);
+    doc.text(reportDateLabel, 14, 43);
     
     // Add table
     autoTable(doc, {
@@ -91,7 +107,7 @@ export function WagesReport({ onNavigate }: Props) {
     doc.text('Tips are calculated based on pooled amounts distributed among staff.', 14, finalY + 46);
     
     // Save the PDF
-    doc.save('wages-tips-report-2025-11-20.pdf');
+    doc.save(`wages-tips-report-${reportDateISO}.pdf`);
   };
 
   const handlePrint = () => {
@@ -156,7 +172,7 @@ export function WagesReport({ onNavigate }: Props) {
                 <Calendar className="w-5 h-5 text-gray-400" />
                 <Input 
                   type="date" 
-                  defaultValue="2025-11-20"
+                  defaultValue={reportDateISO}
                   className="rounded-xl h-10 border-gray-200"
                 />
               </div>
@@ -235,7 +251,7 @@ export function WagesReport({ onNavigate }: Props) {
               <div className="w-2 h-2 bg-white rounded-full" />
             </div>
             <div>
-              <div className="font-medium text-blue-900 mb-1">Report generated for Wednesday, November 20, 2025</div>
+              <div className="font-medium text-blue-900 mb-1">Report generated for {reportDateLabel}</div>
               <div className="text-sm text-blue-800">
                 This report includes all shifts completed on the selected date. Tips are calculated based on pooled amounts distributed among staff.
               </div>
