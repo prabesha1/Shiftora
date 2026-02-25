@@ -85,4 +85,7 @@ For a step‑by‑step Atlas vs. local walkthrough (and common pitfalls), see `d
 - `docs/shiftora-detailed-setup.md` – deeper setup steps (Atlas vs. local), sample cURL calls, and guidance on wiring remaining hard‑coded lists to live collections.
 
 ## Notes
-- This is a student capstone; no license file is present. Add one if you plan to distribute.
+- This is a student capstone; no license file is present. Add one if you plan to distribute. 
+
+Prabesh Shrestha
+moksh Chhetri
