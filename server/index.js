@@ -21,6 +21,15 @@ let seeded = false;
 
 const MINUTES_IN_DAY = 24 * 60;
 
+const startOfWeekMonday = (date) => {
+  const d = new Date(date);
+  const day = d.getDay(); // 0 (Sun) - 6 (Sat)
+  const diff = (day + 6) % 7; // days since Monday
+  d.setDate(d.getDate() - diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
 const toMinutes = (time) => {
   const [hours, minutes] = String(time || '').split(':').map(Number);
   if ([hours, minutes].some((value) => Number.isNaN(value))) return null;
@@ -278,6 +287,59 @@ app.post('/api/punches/break-end', authMiddleware, async (req, res) => {
   res.json({ updated: true });
 });
 
+// REQUESTS (swap/leave) - basic CRUD to support manager review
+app.get('/api/requests', authMiddleware, async (req, res) => {
+  const database = await getDb();
+  const filter = {};
+  if (req.query.status) filter.status = req.query.status;
+  const requests = await database
+    .collection('requests')
+    .find(filter)
+    .sort({ createdAt: -1 })
+    .toArray();
+  res.json(requests);
+});
+
+app.post('/api/requests', async (req, res) => {
+  // For demo simplicity, allow unauthenticated creation; add auth if needed.
+  const { employee, employeeId, shift, role, reason, type = 'swap' } = req.body || {};
+  if (!employee || !shift || !role || !reason) {
+    return res.status(400).json({ message: 'Missing fields' });
+  }
+  const database = await getDb();
+  const doc = {
+    employee,
+    employeeId: employeeId || null,
+    shift,
+    role,
+    reason,
+    type,
+    status: 'pending',
+    managerNote: '',
+    createdAt: new Date(),
+  };
+  const result = await database.collection('requests').insertOne(doc);
+  res.status(201).json({ _id: result.insertedId, ...doc });
+});
+
+app.patch('/api/requests/:id', authMiddleware, async (req, res) => {
+  const { status, managerNote } = req.body || {};
+  if (!['approved', 'declined', 'pending'].includes(status)) {
+    return res.status(400).json({ message: 'Invalid status' });
+  }
+  try {
+    const database = await getDb();
+    const update = { status };
+    if (managerNote !== undefined) update.managerNote = managerNote;
+    await database
+      .collection('requests')
+      .updateOne({ _id: new ObjectId(req.params.id) }, { $set: update });
+    res.json({ updated: true });
+  } catch (err) {
+    res.status(400).json({ message: 'Invalid request id' });
+  }
+});
+
 // REPORTS
 const minutesWorked = (punch) => {
   if (!punch.clockIn) return 0;
@@ -389,6 +451,109 @@ async function buildWeekly(database, today) {
     laborCostPercentage: 0,
   };
 }
+
+// Employee-focused weekly report with wages, tips, hours
+app.get('/api/reports/employee/weekly', authMiddleware, async (req, res) => {
+  const { employeeId, periods = 1, reference } = req.query || {};
+  if (!employeeId) return res.status(400).json({ message: 'employeeId required' });
+  const database = await getDb();
+
+  const buildWeek = async (weekStartDate) => {
+    const weekStart = startOfWeekMonday(weekStartDate);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+
+    const [punches, tips, employees] = await Promise.all([
+      database
+        .collection('punches')
+        .find({ clockIn: { $gte: weekStart, $lt: weekEnd } })
+        .toArray(),
+      database
+        .collection('tips')
+        .find({
+          date: {
+            $gte: weekStart.toISOString().split('T')[0],
+            $lt: weekEnd.toISOString().split('T')[0],
+          },
+        })
+        .toArray(),
+      database.collection('employees').find().toArray(),
+    ]);
+
+    const employeeDoc =
+      employees.find((e) => e._id?.toString() === employeeId) ||
+      employees.find((e) => e.userId?.toString && e.userId.toString() === employeeId) ||
+      employees.find((e) => e.email === req.query.email);
+
+    const hourlyRate = employeeDoc?.hourlyRate || 16;
+    const name = employeeDoc?.name || 'Employee';
+    const role = employeeDoc?.role || 'Employee';
+
+    const dayMap = {};
+    punches.forEach((p) => {
+      const dateStr = new Date(p.clockIn).toISOString().split('T')[0];
+      if (!dayMap[dateStr]) dayMap[dateStr] = [];
+      dayMap[dateStr].push(p);
+    });
+
+    let totalMinutes = 0;
+    let totalTips = 0;
+    const days = [];
+
+    for (let i = 0; i < 7; i++) {
+      const day = new Date(weekStart);
+      day.setDate(weekStart.getDate() + i);
+      const dateStr = day.toISOString().split('T')[0];
+
+      const punchesForDay = dayMap[dateStr] || [];
+      const minutesForEmployee = punchesForDay
+        .filter((p) => p.employeeId === employeeId)
+        .reduce((sum, p) => sum + minutesWorked(p), 0);
+
+      const participants = new Set(punchesForDay.map((p) => p.employeeId));
+      const tipsForDay = tips
+        .filter((t) => t.date === dateStr)
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const tipShare = participants.size ? tipsForDay / participants.size : 0;
+
+      totalMinutes += minutesForEmployee;
+      totalTips += minutesForEmployee > 0 ? tipShare : 0;
+
+      days.push({
+        date: dateStr,
+        hours: Math.round((minutesForEmployee / 60) * 100) / 100,
+        tips: Math.round(tipShare * 100) / 100,
+      });
+    }
+
+    const hoursWorked = Math.round((totalMinutes / 60) * 100) / 100;
+    const wages = Math.round(hoursWorked * hourlyRate * 100) / 100;
+
+    return {
+      weekStart: weekStart.toISOString().split('T')[0],
+      weekEnd: new Date(weekEnd.getTime() - 1).toISOString().split('T')[0],
+      employeeId,
+      name,
+      role,
+      hoursWorked,
+      wages,
+      tips: Math.round(totalTips * 100) / 100,
+      hourlyRate,
+      days,
+    };
+  };
+
+  const periodsCount = Math.max(1, Math.min(4, Number(periods)));
+  const refDate = reference ? new Date(reference) : new Date();
+  const weeks = [];
+  for (let i = 0; i < periodsCount; i++) {
+    const weekStart = new Date(refDate);
+    weekStart.setDate(refDate.getDate() - i * 7);
+    weeks.push(await buildWeek(weekStart));
+  }
+
+  res.json({ weeks });
+});
 
 // Seed with a manager/admin for quick use
 async function seed(database) {

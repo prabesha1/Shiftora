@@ -1,4 +1,4 @@
-import { Calendar, Users, RefreshCw, Plus, FileText, ChevronRight } from 'lucide-react';
+import { Calendar, Users, RefreshCw, Plus, FileText, ChevronRight, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { useState } from 'react';
@@ -33,6 +33,7 @@ type Employee = {
   role: string;
   status?: string;
   hourlyRate?: number;
+  email?: string;
 };
 
 type Punch = {
@@ -42,6 +43,19 @@ type Punch = {
   clockIn: string;
   clockOut?: string;
   breaks: { start: string; end?: string }[];
+};
+
+type SwapRequest = {
+  _id: string;
+  employee: string;
+  employeeId?: string;
+  shift: string;
+  role: string;
+  reason: string;
+  type: 'swap' | 'leave';
+  status: 'pending' | 'approved' | 'declined';
+  managerNote?: string;
+  createdAt: string;
 };
 
 export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
@@ -67,6 +81,9 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   const [showManagerProfile, setShowManagerProfile] = useState(false);
   const [selectedDay, setSelectedDay] = useState<{date: string, day: string, weekLabel: string} | null>(null);
   const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
+  const [requests, setRequests] = useState<SwapRequest[]>([]);
+  const [declineNotes, setDeclineNotes] = useState<Record<string, string>>({});
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
   
   // Shift management state
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -87,13 +104,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     date: ''
   });
 
-  const swapRequests = [
-    { id: 1, employee: 'Alex Rodriguez', shift: 'Wed · 4–10 PM', role: 'Server', reason: 'Have a final exam', type: 'swap' },
-    { id: 2, employee: 'Sarah Chen', shift: 'Thu · 5–11 PM', role: 'Server', reason: 'Family emergency', type: 'swap' },
-    { id: 3, employee: 'Jordan Lee', shift: 'Sat · 11 AM–5 PM', role: 'Host', reason: "Doctor's appointment", type: 'swap' },
-    { id: 4, employee: 'Taylor Kim', shift: 'Fri · 6 PM–12 AM', role: 'Bartender', reason: 'Personal leave', type: 'leave' },
-    { id: 5, employee: 'Morgan Davis', shift: 'Sun · 12 PM–6 PM', role: 'Server', reason: 'Sick leave', type: 'leave' },
-  ];
+  const swapRequests = requests.filter((r) => r.status === 'pending');
 
   const liveEmployeeStatus = employees.map((emp) => {
     const openPunch = punches.find((p) => p.employeeId === emp._id && !p.clockOut);
@@ -168,6 +179,23 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     setTimeout(() => setConfirmationMessage(null), 3000);
   };
 
+  const handleRequestAction = async (requestId: string, status: 'approved' | 'declined') => {
+    const note = status === 'declined' ? (declineNotes[requestId] || '') : '';
+    try {
+      setProcessingRequestId(requestId);
+      await api.updateRequest(requestId, { status, managerNote: note }, user.token);
+      setRequests((prev) => prev.filter((r) => r._id !== requestId));
+      setConfirmationMessage(
+        `Request ${status === 'approved' ? 'approved' : 'declined'}${note ? `: ${note}` : ''}`
+      );
+    } catch (err: any) {
+      setConfirmationMessage(err.message || 'Failed to update request.');
+    } finally {
+      setProcessingRequestId(null);
+      setTimeout(() => setConfirmationMessage(null), 3000);
+    }
+  };
+
   const handleAddTip = async () => {
     const amount = parseFloat(tipAmount);
     if (Number.isNaN(amount) || amount <= 0) {
@@ -190,16 +218,18 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     const load = async () => {
       try {
         setLoading(true);
-        const [empList, shiftList, punchList, tipList] = await Promise.all([
+        const [empList, shiftList, punchList, tipList, requestList] = await Promise.all([
           api.getEmployees(user.token),
           api.getShifts({ start: toISODate(week1Start), end: toISODate(week2End) }, user.token),
           api.getPunches({}, user.token),
           api.getTips(todayIso, user.token),
+          api.getRequests('pending', user.token),
         ]);
         setEmployees(empList as Employee[]);
         setShifts(shiftList as Shift[]);
         setPunches(punchList as Punch[]);
         setTips(tipList as any[]);
+        setRequests(requestList as SwapRequest[]);
       } catch (err: any) {
         setConfirmationMessage(err.message || 'Failed to load data.');
       } finally {
@@ -207,6 +237,17 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       }
     };
     load();
+
+    const interval = setInterval(async () => {
+      try {
+        const requestList = await api.getRequests('pending', user.token);
+        setRequests(requestList as SwapRequest[]);
+      } catch {
+        // ignore polling errors
+      }
+    }, 8000);
+
+    return () => clearInterval(interval);
   }, [user.token, week1Start, week2End, todayIso]);
 
   return (
@@ -395,12 +436,12 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xl">Pending requests</h2>
-              <Badge variant="secondary" className="rounded-full">5 new</Badge>
+              <Badge variant="secondary" className="rounded-full">{swapRequests.length} new</Badge>
             </div>
 
             <div className="space-y-3">
               {swapRequests.slice(0, 3).map((request) => (
-                <div key={request.id} className="p-4 rounded-xl border border-gray-200 hover:border-gray-300 transition-colors space-y-3">
+                <div key={request._id} className="p-4 rounded-xl border border-gray-200 hover:border-gray-300 transition-colors space-y-3">
                   <div className="flex items-start justify-between">
                     <div>
                       <div className="font-medium">{request.employee}</div>
@@ -413,25 +454,41 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                     </Badge>
                   </div>
                   <div className="text-sm text-gray-600">{request.reason}</div>
+                  <textarea
+                    className="w-full rounded-lg border border-gray-200 bg-gray-50 text-sm p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    placeholder="Add a note when declining (optional)"
+                    value={declineNotes[request._id] || ''}
+                    onChange={(e) =>
+                      setDeclineNotes((prev) => ({ ...prev, [request._id]: e.target.value }))
+                    }
+                  />
                   <div className="flex gap-2">
                     <Button 
                       size="sm"
                       className="flex-1 rounded-full bg-[#22C55E] hover:bg-[#22C55E]/90 h-8"
-                      onClick={() => handleApproveRequest(request.employee, request.type)}
+                      onClick={() => handleRequestAction(request._id, 'approved')}
+                      disabled={processingRequestId === request._id}
                     >
-                      Approve
+                      {processingRequestId === request._id ? 'Updating…' : 'Approve'}
                     </Button>
                     <Button 
                       size="sm"
                       variant="outline"
                       className="flex-1 rounded-full border-red-200 text-red-600 hover:bg-red-50 h-8"
-                      onClick={() => handleDeclineRequest(request.employee, request.type)}
+                      onClick={() => handleRequestAction(request._id, 'declined')}
+                      disabled={processingRequestId === request._id}
                     >
-                      Decline
+                      {processingRequestId === request._id ? 'Updating…' : 'Decline'}
                     </Button>
                   </div>
                 </div>
               ))}
+
+              {swapRequests.length === 0 && (
+                <div className="p-4 rounded-xl border border-dashed border-gray-200 text-sm text-gray-600">
+                  No pending requests right now.
+                </div>
+              )}
             </div>
 
             <button 
@@ -828,7 +885,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           
           <div className="space-y-3 mt-4">
             {swapRequests.map((request) => (
-              <div key={request.id} className="p-5 rounded-xl border-2 border-gray-200 bg-gray-50">
+              <div key={request._id} className="p-5 rounded-xl border-2 border-gray-200 bg-gray-50 space-y-3">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white">
@@ -851,29 +908,47 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   <div className="text-gray-900">{request.reason}</div>
                 </div>
 
+                <div className="space-y-2">
+                  <Label className="text-sm text-gray-600">Decline note (optional)</Label>
+                  <textarea
+                    className="w-full rounded-lg border border-gray-200 bg-gray-50 text-sm p-3 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    placeholder="Let the employee know why this request was declined."
+                    value={declineNotes[request._id] || ''}
+                    onChange={(e) =>
+                      setDeclineNotes((prev) => ({ ...prev, [request._id]: e.target.value }))
+                    }
+                  />
+                </div>
+
                 <div className="flex gap-2">
                   <Button 
                     className="flex-1 rounded-xl bg-[#22C55E] hover:bg-[#22C55E]/90"
                     onClick={() => {
-                      handleApproveRequest(request.employee, request.type);
-                      setShowSwapRequestsModal(false);
+                      handleRequestAction(request._id, 'approved');
                     }}
+                    disabled={processingRequestId === request._id}
                   >
-                    Approve
+                    {processingRequestId === request._id ? 'Updating…' : 'Approve'}
                   </Button>
                   <Button 
                     variant="outline"
                     className="flex-1 rounded-xl border-red-200 text-red-600 hover:bg-red-50"
                     onClick={() => {
-                      handleDeclineRequest(request.employee, request.type);
-                      setShowSwapRequestsModal(false);
+                      handleRequestAction(request._id, 'declined');
                     }}
+                    disabled={processingRequestId === request._id}
                   >
-                    Decline
+                    {processingRequestId === request._id ? 'Updating…' : 'Decline'}
                   </Button>
                 </div>
               </div>
             ))}
+
+            {swapRequests.length === 0 && (
+              <div className="p-4 rounded-xl border border-dashed border-gray-200 text-sm text-gray-600">
+                No pending requests right now.
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

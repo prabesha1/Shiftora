@@ -10,6 +10,19 @@ export type User = {
   token: string;
 };
 
+export type Request = {
+  _id: string;
+  employee: string;
+  employeeId?: string;
+  shift: string;
+  role: string;
+  reason: string;
+  type: 'swap' | 'leave';
+  status: 'pending' | 'approved' | 'declined';
+  managerNote?: string;
+  createdAt: string;
+};
+
 const request = async <T>(
   path: string,
   method: HttpMethod = 'GET',
@@ -69,6 +82,18 @@ export const api = {
   getDailyReport: (date: string, token?: string) =>
     request(`/api/reports/daily?date=${date}`, 'GET', undefined, token),
   getOverviewReport: (token?: string) => request('/api/reports/overview', 'GET', undefined, token),
+  getEmployeeWeekly: (employeeId: string, periods = 1, token?: string, email?: string) => {
+    const params = new URLSearchParams({ employeeId, periods: String(periods) });
+    if (email) params.set('email', email);
+    return request(`/api/reports/employee/weekly?${params.toString()}`, 'GET', undefined, token);
+  },
+
+  // Requests (swap/leave)
+  getRequests: (status?: string, token?: string) =>
+    request<Request[]>(`/api/requests${status ? `?status=${status}` : ''}`, 'GET', undefined, token),
+  createRequest: (data: any) => request<Request>('/api/requests', 'POST', data),
+  updateRequest: (id: string, data: { status: string; managerNote?: string }, token?: string) =>
+    request(`/api/requests/${id}`, 'PATCH', data, token),
 };
 
 export const loadStoredUser = (): User | null => {

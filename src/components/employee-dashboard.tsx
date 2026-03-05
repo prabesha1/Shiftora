@@ -12,7 +12,7 @@ import { calculateShiftDurationHours, formatHours, toISODate } from '../utils/ti
 type Props = {
   onNavigate: (page: string) => void;
   onLogout: () => void;
-  user: { id: string; name: string; token: string };
+  user: { id: string; name: string; email: string; token: string };
 };
 
 type PunchStatus = 'not-punched-in' | 'punched-in' | 'on-break';
@@ -27,6 +27,13 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const [showPaymentHistoryModal, setShowPaymentHistoryModal] = useState(false);
   const [punchInTime, setPunchInTime] = useState<string>('');
   const [breakStartTime, setBreakStartTime] = useState<string>('');
+  const [employeeId, setEmployeeId] = useState<string>(user.id);
+  const [employeeProfile, setEmployeeProfile] = useState<any | null>(null);
+  const [weeklySummary, setWeeklySummary] = useState<any | null>(null);
+  const [weeklyHistory, setWeeklyHistory] = useState<any[]>([]);
+  const [shiftSelection, setShiftSelection] = useState<string>('');
+  const [swapReason, setSwapReason] = useState<string>('');
+  const [punchPromptShown, setPunchPromptShown] = useState(false);
   const todayIso = toISODate(new Date());
 
   const deriveStatusFromPunches = (records: any[]): PunchStatus => {
@@ -43,35 +50,55 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const refreshData = async () => {
     try {
       setLoading(true);
-      const [shiftRes, punchRes] = await Promise.all([
-        api.getShifts({ employeeId: user.id }, user.token),
-        api.getPunches({ employeeId: user.id }, user.token),
-      ]);
+      const employeesList = await api.getEmployees(user.token);
+      const profile =
+        employeesList.find((e: any) => e.userId?.toString && e.userId.toString() === user.id) ||
+        employeesList.find((e: any) => e.email === user.email) ||
+        employeesList[0];
+      setEmployeeProfile(profile || null);
+
+      const targetEmployeeId = (profile && (profile._id || profile.userId || user.id)) || user.id;
+      setEmployeeId(String(targetEmployeeId));
+
+      let shiftRes = await api.getShifts({ employeeId: targetEmployeeId }, user.token);
+      if ((shiftRes as any[]).length === 0) {
+        const allShifts = await api.getShifts({}, user.token);
+        shiftRes = (allShifts as any[]).filter((s) => s.employee === user.name);
+      }
+      const punchRes = await api.getPunches({ employeeId: targetEmployeeId }, user.token);
+
+      const weekly = await api.getEmployeeWeekly(targetEmployeeId, 2, user.token, user.email);
+      setWeeklySummary(weekly?.weeks?.[0] || null);
+      setWeeklyHistory(weekly?.weeks || []);
+
       setShifts(shiftRes as any[]);
       setPunches(punchRes as any[]);
       setPunchStatus(deriveStatusFromPunches(punchRes as any[]));
     } finally {
       setLoading(false);
+      setInitialized(true);
     }
   };
 
   useEffect(() => {
     refreshData();
-  }, [user.id, user.token]);
+  }, [user.id, user.token, user.email]);
   const [shifts, setShifts] = useState<any[]>([]);
   const [punches, setPunches] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initialized, setInitialized] = useState(false);
 
   const handlePunchIn = async () => {
-    await api.clockIn({ employeeId: user.id }, user.token);
+    await api.clockIn({ employeeId }, user.token);
     setPunchStatus('punched-in');
     setPunchInTime(new Date().toLocaleTimeString());
     setShowPunchInModal(false);
+    setPunchPromptShown(true);
     refreshData();
   };
 
   const handlePunchOut = async () => {
-    await api.clockOut({ employeeId: user.id }, user.token);
+    await api.clockOut({ employeeId }, user.token);
     setPunchStatus('not-punched-in');
     setPunchInTime('');
     setShowPunchOutModal(false);
@@ -79,7 +106,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   };
 
   const handleStartBreak = async () => {
-    await api.breakStart({ employeeId: user.id }, user.token);
+    await api.breakStart({ employeeId }, user.token);
     setBreakStartTime(new Date().toLocaleTimeString());
     setPunchStatus('on-break');
     setShowBreakModal(false);
@@ -87,22 +114,46 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   };
 
   const handleEndBreak = async () => {
-    await api.breakEnd({ employeeId: user.id }, user.token);
+    await api.breakEnd({ employeeId }, user.token);
     setPunchStatus('punched-in');
     setBreakStartTime('');
     refreshData();
   };
 
   const getCurrentShift = () => {
+    const upcoming = [...shifts]
+      .filter((s) => s.date >= todayIso)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))[0];
+    if (upcoming) {
+      const dayLabel = new Date(upcoming.date).toLocaleDateString('en-US', { weekday: 'long' });
+      const duration = calculateShiftDurationHours(upcoming.startTime, upcoming.endTime);
+      return {
+        day: dayLabel,
+        time: `${upcoming.startTime} – ${upcoming.endTime}`,
+        role: upcoming.role || 'Server',
+        hours: duration,
+      };
+    }
     return {
-      day: 'Wednesday',
-      time: '4:00 PM – 10:00 PM',
+      day: 'Today',
+      time: 'No shift scheduled',
       role: 'Server',
-      hours: 6
+      hours: 0,
     };
   };
 
   const shift = getCurrentShift();
+
+  useEffect(() => {
+    if (!initialized) return;
+    if (!punchPromptShown && punchStatus === 'not-punched-in') {
+      setShowPunchInModal(true);
+      setPunchPromptShown(true);
+    }
+    if (punchStatus !== 'not-punched-in') {
+      setShowPunchInModal(false);
+    }
+  }, [initialized, punchStatus, punchPromptShown]);
 
   return (
     <div className="min-h-screen">
@@ -195,15 +246,21 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="shift-select">Select shift</Label>
-                    <Select>
+                    <Select value={shiftSelection} onValueChange={setShiftSelection}>
                       <SelectTrigger className="rounded-xl h-11" id="shift-select">
                         <SelectValue placeholder="Choose a shift" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="wed">Wed · 4–10 PM · Server</SelectItem>
-                        <SelectItem value="fri">Fri · 5–11 PM · Host</SelectItem>
-                        <SelectItem value="sat">Sat · 11 AM–5 PM · Server</SelectItem>
-                        <SelectItem value="sun">Sun · 12–6 PM · Server</SelectItem>
+                        {shifts
+                          .filter((s) => s.date >= todayIso)
+                          .map((s) => {
+                            const label = `${new Date(s.date).toLocaleDateString('en-US', { weekday: 'short' })} · ${s.startTime}-${s.endTime} · ${s.role || 'Server'}`;
+                            return (
+                              <SelectItem key={s._id || label} value={s._id || label}>
+                                {label}
+                              </SelectItem>
+                            );
+                          })}
                       </SelectContent>
                     </Select>
                   </div>
@@ -214,12 +271,45 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                       id="reason"
                       placeholder="Please explain why you need to swap this shift..."
                       className="rounded-xl min-h-[120px] resize-none"
+                      value={swapReason}
+                      onChange={(e) => setSwapReason(e.target.value)}
                     />
                   </div>
 
                   <Button 
                     className="w-full rounded-full h-11 bg-[#2563EB] hover:bg-[#1d4ed8]"
-                    onClick={() => setSwapRequestSent(true)}
+                    onClick={async () => {
+                      if (!shiftSelection) {
+                        alert('Select a shift to request a swap.');
+                        return;
+                      }
+                      const selectedShift =
+                        shifts.find((s) => (s._id || s.id) === shiftSelection) ||
+                        shifts.find(
+                          (s) =>
+                            `${new Date(s.date).toLocaleDateString('en-US', { weekday: 'short' })} · ${s.startTime}-${s.endTime} · ${s.role || 'Server'}` ===
+                            shiftSelection
+                        );
+                      try {
+                        await api.createRequest({
+                          employee: user.name,
+                          employeeId,
+                          shift: selectedShift
+                            ? `${new Date(selectedShift.date).toLocaleDateString('en-US', {
+                                weekday: 'long',
+                              })} · ${selectedShift.startTime}-${selectedShift.endTime}`
+                            : shiftSelection,
+                          role: selectedShift?.role || 'Server',
+                          reason: swapReason || 'No reason provided',
+                          type: 'swap',
+                        });
+                        setSwapRequestSent(true);
+                        setSwapReason('');
+                        setShiftSelection('');
+                      } catch (err: any) {
+                        alert(err.message || 'Failed to send request');
+                      }
+                    }}
                   >
                     Send swap request
                   </Button>
@@ -278,7 +368,9 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
         <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-6">
           <div className="flex items-center justify-between">
             <h2 className="text-xl">Wages & tips (this week)</h2>
-            <Badge variant="secondary" className="rounded-full">Nov 18–24</Badge>
+            <Badge variant="secondary" className="rounded-full">
+              {weeklySummary ? `${weeklySummary.weekStart} – ${weeklySummary.weekEnd}` : 'Loading…'}
+            </Badge>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
@@ -287,10 +379,14 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                 <div className="w-10 h-10 rounded-xl bg-purple-200 flex items-center justify-center">
                   <DollarSign className="w-5 h-5 text-purple-700" />
                 </div>
-                <div className="text-sm text-gray-600">Actual wages earned</div>
+              <div className="text-sm text-gray-600">Actual wages earned</div>
               </div>
-              <div className="text-3xl mb-1">$360</div>
-              <div className="text-sm text-gray-600 mb-3">From 2 completed shifts (12 hours)</div>
+              <div className="text-3xl mb-1">
+                {weeklySummary ? `$${weeklySummary.wages.toFixed(2)}` : '—'}
+              </div>
+              <div className="text-sm text-gray-600 mb-3">
+                {weeklySummary ? `From ${weeklySummary.hoursWorked.toFixed(2)} hours` : 'Calculating…'}
+              </div>
               <div className="flex items-center gap-2 text-xs text-purple-700 bg-purple-100 rounded-lg px-2 py-1 w-fit">
                 <span>✓ Paid on next Friday</span>
               </div>
@@ -301,34 +397,15 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                 <div className="w-10 h-10 rounded-xl bg-green-200 flex items-center justify-center">
                   <DollarSign className="w-5 h-5 text-green-700" />
                 </div>
-                <div className="text-sm text-gray-600">Actual tips earned</div>
+              <div className="text-sm text-gray-600">Actual tips earned</div>
               </div>
-              <div className="text-3xl mb-1">$70</div>
+              <div className="text-3xl mb-1">
+                {weeklySummary ? `$${weeklySummary.tips.toFixed(2)}` : '—'}
+              </div>
               <div className="text-sm text-gray-600 mb-3">From completed shifts</div>
               <div className="flex items-center gap-2 text-xs text-green-700 bg-green-100 rounded-lg px-2 py-1 w-fit">
                 <span>✓ Paid with wages</span>
               </div>
-            </div>
-          </div>
-
-          {/* Additional earnings info */}
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="p-4 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/30">
-              <div className="flex items-center gap-2 mb-2">
-                <Calendar className="w-4 h-4 text-blue-600" />
-                <div className="text-sm font-medium text-blue-900">Upcoming shifts</div>
-              </div>
-              <div className="text-2xl text-blue-900 mb-1">$360</div>
-              <div className="text-xs text-blue-700">Estimated from 2 remaining shifts</div>
-            </div>
-
-            <div className="p-4 rounded-xl border-2 border-dashed border-green-200 bg-green-50/30">
-              <div className="flex items-center gap-2 mb-2">
-                <DollarSign className="w-4 h-4 text-green-600" />
-                <div className="text-sm font-medium text-green-900">Estimated tips</div>
-              </div>
-              <div className="text-2xl text-green-900 mb-1">$90</div>
-              <div className="text-xs text-green-700">Projected from upcoming shifts</div>
             </div>
           </div>
 
@@ -357,12 +434,21 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-gray-600">Hours worked this week</span>
-                <span className="font-medium">12 of 24 hours</span>
+                <span className="font-medium">
+                  {weeklySummary ? `${weeklySummary.hoursWorked.toFixed(2)} hrs` : '—'}
+                </span>
               </div>
               <div className="w-full bg-gray-100 rounded-full h-2">
-                <div className="bg-blue-600 h-2 rounded-full" style={{ width: '50%' }} />
+                <div
+                  className="bg-blue-600 h-2 rounded-full"
+                  style={{
+                    width: `${Math.min(100, weeklySummary ? (weeklySummary.hoursWorked / 40) * 100 : 0)}%`,
+                  }}
+                />
               </div>
-              <div className="text-xs text-gray-500 mt-1">50% complete · 2 shifts remaining</div>
+              <div className="text-xs text-gray-500 mt-1">
+                {weeklySummary ? `${weeklySummary.hoursWorked.toFixed(2)} / 40 hrs target` : 'Loading…'}
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -380,71 +466,40 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                 </div>
               </div>
               
-              {/* Completed Shifts */}
-              <div className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#22C55E] flex items-center justify-center text-xs text-white font-medium">
-                    ✓
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium">Mon · 4–10 PM · Server</div>
-                    <div className="text-xs text-gray-600">Completed · 6 hours</div>
-                  </div>
+              {weeklySummary && weeklySummary.days.some((d: any) => d.hours > 0) ? (
+                weeklySummary.days
+                  .filter((d: any) => d.hours > 0)
+                  .map((d: any) => (
+                    <div
+                      key={d.date}
+                      className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-[#22C55E] flex items-center justify-center text-xs text-white font-medium">
+                          ✓
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium">
+                            {new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' })}
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            {d.hours.toFixed(2)} hrs · Tips ${d.tips.toFixed(2)}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-medium text-[#22C55E]">
+                          ${weeklySummary ? (weeklySummary.hourlyRate * d.hours).toFixed(2) : '—'}
+                        </div>
+                        <div className="text-xs text-green-700">+${d.tips.toFixed(2)} tips</div>
+                      </div>
+                    </div>
+                  ))
+              ) : (
+                <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-600">
+                  No hours logged yet this week.
                 </div>
-                <div className="text-right">
-                  <div className="text-sm font-medium text-[#22C55E]">$180</div>
-                  <div className="text-xs text-green-700">+$35 tips</div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#22C55E] flex items-center justify-center text-xs text-white font-medium">
-                    ✓
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium">Tue · 5–11 PM · Host</div>
-                    <div className="text-xs text-gray-600">Completed · 6 hours</div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-medium text-[#22C55E]">$180</div>
-                  <div className="text-xs text-green-700">+$35 tips</div>
-                </div>
-              </div>
-
-              {/* Upcoming Shifts */}
-              <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-xs">
-                    Sat
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium">11 AM–5 PM · Server</div>
-                    <div className="text-xs text-gray-600">Upcoming · 6 hours</div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-medium text-gray-400">$180</div>
-                  <div className="text-xs text-gray-400">~$45 tips</div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-xs">
-                    Sun
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium">12–6 PM · Server</div>
-                    <div className="text-xs text-gray-600">Upcoming · 6 hours</div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-medium text-gray-400">$180</div>
-                  <div className="text-xs text-gray-400">~$45 tips</div>
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Total Summary */}
@@ -454,15 +509,9 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                   <div className="font-medium text-green-900">Earned this week</div>
                   <div className="text-xs text-green-700 mt-0.5">From completed shifts</div>
                 </div>
-                <div className="text-2xl text-green-900">$430</div>
-              </div>
-
-              <div className="flex items-center justify-between p-4 rounded-xl bg-blue-50 border border-blue-100">
-                <div>
-                  <div className="font-medium text-blue-900">Projected weekly total</div>
-                  <div className="text-xs text-blue-700 mt-0.5">Including upcoming shifts</div>
+                <div className="text-2xl text-green-900">
+                  {weeklySummary ? `$${(weeklySummary.wages + weeklySummary.tips).toFixed(2)}` : '—'}
                 </div>
-                <div className="text-2xl text-blue-900">$880</div>
               </div>
             </div>
           </div>
@@ -868,194 +917,61 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             </DialogHeader>
 
             <div className="space-y-4 mt-4">
-              {/* Current Pay Period (Nov 18-Dec 1) */}
-              <div className="p-5 rounded-xl border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100/50">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="font-medium text-lg">Nov 18 – Dec 1, 2025</div>
-                    <div className="text-sm text-gray-600">Current pay period • In progress</div>
-                  </div>
-                  <Badge className="bg-amber-500 hover:bg-amber-500">Pending</Badge>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div className="p-3 rounded-lg bg-white/80">
-                    <div className="text-xs text-gray-600 mb-1">Total Hours</div>
-                    <div className="text-xl font-medium">12 hrs</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-white/80">
-                    <div className="text-xs text-gray-600 mb-1">Wages</div>
-                    <div className="text-xl font-medium">$360</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-white/80">
-                    <div className="text-xs text-gray-600 mb-1">Tips</div>
-                    <div className="text-xl font-medium">$70</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-white/80">
-                    <div className="text-xs text-gray-600 mb-1">Total</div>
-                    <div className="text-xl font-medium text-blue-600">$430</div>
-                  </div>
-                </div>
+              {weeklyHistory.length === 0 && (
+                <div className="text-sm text-gray-600">No payment history yet.</div>
+              )}
 
-                <div className="text-xs text-blue-700 bg-blue-100 rounded-lg px-3 py-2">
-                  ✓ Payment scheduled for Friday, Dec 6, 2025
-                </div>
-              </div>
+              {weeklyHistory.map((week, idx) => (
+                <div
+                  key={week.weekStart}
+                  className={`p-5 rounded-xl ${
+                    idx === 0
+                      ? 'border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100/50'
+                      : 'border border-gray-200 bg-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <div className="font-medium text-lg">
+                        {week.weekStart} – {week.weekEnd}
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        {idx === 0 ? 'Current pay period • In progress' : 'Past pay period'}
+                      </div>
+                    </div>
+                    <Badge className={idx === 0 ? 'bg-amber-500 hover:bg-amber-500' : 'bg-[#22C55E] hover:bg-[#22C55E]'}>
+                      {idx === 0 ? 'Pending' : 'Paid'}
+                    </Badge>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div className="p-3 rounded-lg bg-white/80">
+                      <div className="text-xs text-gray-600 mb-1">Total Hours</div>
+                      <div className="text-xl font-medium">{week.hoursWorked.toFixed(2)} hrs</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white/80">
+                      <div className="text-xs text-gray-600 mb-1">Wages</div>
+                      <div className="text-xl font-medium">${week.wages.toFixed(2)}</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white/80">
+                      <div className="text-xs text-gray-600 mb-1">Tips</div>
+                      <div className="text-xl font-medium">${week.tips.toFixed(2)}</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white/80">
+                      <div className="text-xs text-gray-600 mb-1">Total</div>
+                      <div className="text-xl font-medium text-blue-600">
+                        ${(week.wages + week.tips).toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Previous Pay Period (Nov 4-17) */}
-              <div className="p-5 rounded-xl border border-gray-200 bg-white">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="font-medium text-lg">Nov 4 – Nov 17, 2025</div>
-                    <div className="text-sm text-gray-600">Paid on Nov 22, 2025</div>
-                  </div>
-                  <Badge className="bg-[#22C55E] hover:bg-[#22C55E]">Paid</Badge>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total Hours</div>
-                    <div className="text-xl font-medium">48 hrs</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Wages</div>
-                    <div className="text-xl font-medium">$1,440</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Tips</div>
-                    <div className="text-xl font-medium">$325</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total</div>
-                    <div className="text-xl font-medium text-[#22C55E]">$1,765</div>
+                  <div className="text-xs text-blue-700 bg-blue-100 rounded-lg px-3 py-2">
+                    {idx === 0
+                      ? '✓ Payment will be included in the next payroll'
+                      : '✓ Paid via direct deposit'}
                   </div>
                 </div>
-
-                <div className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                  ✓ Direct deposit completed • 8 shifts worked
-                </div>
-              </div>
-
-              {/* Oct 21 - Nov 3 */}
-              <div className="p-5 rounded-xl border border-gray-200 bg-white">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="font-medium text-lg">Oct 21 – Nov 3, 2025</div>
-                    <div className="text-sm text-gray-600">Paid on Nov 8, 2025</div>
-                  </div>
-                  <Badge className="bg-[#22C55E] hover:bg-[#22C55E]">Paid</Badge>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total Hours</div>
-                    <div className="text-xl font-medium">44 hrs</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Wages</div>
-                    <div className="text-xl font-medium">$1,320</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Tips</div>
-                    <div className="text-xl font-medium">$298</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total</div>
-                    <div className="text-xl font-medium text-[#22C55E]">$1,618</div>
-                  </div>
-                </div>
-
-                <div className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                  ✓ Direct deposit completed • 7 shifts worked
-                </div>
-              </div>
-
-              {/* Oct 7 - Oct 20 */}
-              <div className="p-5 rounded-xl border border-gray-200 bg-white">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="font-medium text-lg">Oct 7 – Oct 20, 2025</div>
-                    <div className="text-sm text-gray-600">Paid on Oct 25, 2025</div>
-                  </div>
-                  <Badge className="bg-[#22C55E] hover:bg-[#22C55E]">Paid</Badge>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total Hours</div>
-                    <div className="text-xl font-medium">42 hrs</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Wages</div>
-                    <div className="text-xl font-medium">$1,260</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Tips</div>
-                    <div className="text-xl font-medium">$285</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total</div>
-                    <div className="text-xl font-medium text-[#22C55E]">$1,545</div>
-                  </div>
-                </div>
-
-                <div className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                  ✓ Direct deposit completed • 7 shifts worked
-                </div>
-              </div>
-
-              {/* Sept 23 - Oct 6 */}
-              <div className="p-5 rounded-xl border border-gray-200 bg-white">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="font-medium text-lg">Sept 23 – Oct 6, 2025</div>
-                    <div className="text-sm text-gray-600">Paid on Oct 11, 2025</div>
-                  </div>
-                  <Badge className="bg-[#22C55E] hover:bg-[#22C55E]">Paid</Badge>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total Hours</div>
-                    <div className="text-xl font-medium">46 hrs</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Wages</div>
-                    <div className="text-xl font-medium">$1,380</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Tips</div>
-                    <div className="text-xl font-medium">$312</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-gray-50">
-                    <div className="text-xs text-gray-600 mb-1">Total</div>
-                    <div className="text-xl font-medium text-[#22C55E]">$1,692</div>
-                  </div>
-                </div>
-
-                <div className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                  ✓ Direct deposit completed • 8 shifts worked
-                </div>
-              </div>
-
-              {/* Summary Card */}
-              <div className="p-5 rounded-xl bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-200">
-                <div className="font-medium text-lg mb-3">Total Earnings (Last 3 months)</div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="text-center">
-                    <div className="text-2xl font-medium text-purple-700">180 hrs</div>
-                    <div className="text-xs text-gray-600 mt-1">Hours Worked</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-2xl font-medium text-purple-700">$5,400</div>
-                    <div className="text-xs text-gray-600 mt-1">Total Wages</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-2xl font-medium text-purple-700">$1,220</div>
-                    <div className="text-xs text-gray-600 mt-1">Total Tips</div>
-                  </div>
-                </div>
-              </div>
+              ))}
             </div>
 
             <div className="flex gap-3 mt-6">
