@@ -1,4 +1,5 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+// In dev, use '' so Vite proxy forwards /api to backend. Otherwise use env or default.
+const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '' : 'http://localhost:4000');
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
@@ -23,26 +24,49 @@ export type Request = {
   createdAt: string;
 };
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 const request = async <T>(
   path: string,
   method: HttpMethod = 'GET',
   body?: any,
   token?: string
 ): Promise<T> => {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || 'Request failed');
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const text = await res.text();
+      let msg = text;
+      try {
+        const json = JSON.parse(text);
+        if (json.message) msg = json.message;
+      } catch { /* ignore */ }
+      throw new Error(msg || 'Request failed');
+    }
+    return res.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('Request timed out. Is the server running at ' + API_BASE + '?');
+    }
+    if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+      throw new Error('Cannot reach server. Start the API with: cd server && node index.js');
+    }
+    throw err;
   }
-  return res.json();
 };
 
 export const api = {
@@ -50,6 +74,8 @@ export const api = {
     request<User>('/api/auth/login', 'POST', { email, password }),
   register: (payload: { name: string; email: string; password: string; role: string }) =>
     request<User>('/api/auth/register', 'POST', payload),
+  changePassword: (currentPassword: string, newPassword: string, token?: string) =>
+    request('/api/auth/change-password', 'PATCH', { currentPassword, newPassword }, token),
 
   getEmployees: (token?: string) => request('/api/employees', 'GET', undefined, token),
   createEmployee: (data: any, token?: string) => request('/api/employees', 'POST', data, token),

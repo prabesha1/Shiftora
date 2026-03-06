@@ -1,12 +1,14 @@
-import { Calendar, DollarSign, Clock, ChevronRight, LogIn, LogOut, Coffee, Loader2 } from 'lucide-react';
+import { Calendar, DollarSign, Clock, ChevronRight, LogIn, LogOut, Coffee, Loader2, Settings, Key } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Label } from './ui/label';
+import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
+import { DateTimePanel } from './datetime-panel';
 import { calculateShiftDurationHours, formatHours, toISODate } from '../utils/time';
 
 type Props = {
@@ -37,6 +39,9 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const [punches, setPunches] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [changePasswordForm, setChangePasswordForm] = useState({ current: '', new: '', confirm: '' });
+  const [changePasswordMessage, setChangePasswordMessage] = useState<string | null>(null);
   const todayIso = toISODate(new Date());
 
   const deriveStatusFromPunches = (records: any[]): PunchStatus => {
@@ -264,6 +269,16 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
+            <DateTimePanel />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hidden sm:flex items-center gap-2"
+              onClick={() => setShowChangePasswordModal(true)}
+            >
+              <Key className="w-4 h-4" />
+              Change Password
+            </Button>
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white">
               {user.name ? user.name[0].toUpperCase() : 'E'}
             </div>
@@ -971,6 +986,93 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             >
               Close
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showChangePasswordModal} onOpenChange={setShowChangePasswordModal}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Change Password</DialogTitle>
+            <DialogDescription>
+              Update your password. You'll use the new password to sign in next time.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            {changePasswordMessage && (
+              <div className={`p-3 rounded-lg text-sm ${changePasswordMessage.startsWith('Password updated') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                {changePasswordMessage}
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label>Current Password</Label>
+              <Input
+                type="password"
+                placeholder="Enter current password"
+                value={changePasswordForm.current}
+                onChange={(e) => setChangePasswordForm((f) => ({ ...f, current: e.target.value }))}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>New Password (min 6 characters)</Label>
+              <Input
+                type="password"
+                placeholder="Enter new password"
+                value={changePasswordForm.new}
+                onChange={(e) => setChangePasswordForm((f) => ({ ...f, new: e.target.value }))}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Confirm New Password</Label>
+              <Input
+                type="password"
+                placeholder="Confirm new password"
+                value={changePasswordForm.confirm}
+                onChange={(e) => setChangePasswordForm((f) => ({ ...f, confirm: e.target.value }))}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button
+                variant="outline"
+                className="flex-1 rounded-xl h-11"
+                onClick={() => {
+                  setShowChangePasswordModal(false);
+                  setChangePasswordForm({ current: '', new: '', confirm: '' });
+                  setChangePasswordMessage(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1 rounded-xl h-11 bg-[#2563EB] hover:bg-[#1d4ed8]"
+                onClick={async () => {
+                  if (changePasswordForm.new !== changePasswordForm.confirm) {
+                    setChangePasswordMessage('New passwords do not match.');
+                    return;
+                  }
+                  if (changePasswordForm.new.length < 6) {
+                    setChangePasswordMessage('New password must be at least 6 characters.');
+                    return;
+                  }
+                  try {
+                    await api.changePassword(changePasswordForm.current, changePasswordForm.new, user.token);
+                    setChangePasswordMessage('Password updated successfully.');
+                    setChangePasswordForm({ current: '', new: '', confirm: '' });
+                    setTimeout(() => {
+                      setShowChangePasswordModal(false);
+                      setChangePasswordMessage(null);
+                    }, 2000);
+                  } catch (err: any) {
+                    setChangePasswordMessage(err.message || 'Failed to update password.');
+                  }
+                }}
+              >
+                Update Password
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -83,7 +83,11 @@ export function ScheduleBuilder({ onClose, token }: Props) {
           { start: toISODate(rangeStartDate), end: toISODate(rangeEndDate) },
           token
         );
-        setShifts(fetched as ShiftBlock[]);
+        const mapped = (fetched as any[]).map((s) => ({
+          ...s,
+          employeeName: s.employee || s.employeeName,
+        }));
+        setShifts(mapped);
       } catch {
         // ignore fetch errors for offline demo
       }
@@ -91,40 +95,43 @@ export function ScheduleBuilder({ onClose, token }: Props) {
     load();
   }, [token, rangeStartDate, rangeEndDate]);
 
-  const departments = [
-    {
-      name: 'Front of House',
+  const getAvatar = (name: string) => {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  };
+
+  const roleColors: Record<string, string> = {
+    Server: 'bg-orange-100',
+    Bartender: 'bg-green-100',
+    Chef: 'bg-amber-100',
+    Manager: 'bg-blue-100',
+  };
+
+  const departments = useMemo(() => {
+    if (!apiEmployees.length) return [];
+    const byDept: Record<string, Record<string, { name: string; avatar: string; _id?: string }[]>> = {};
+    for (const emp of apiEmployees) {
+      const dept = emp.department || 'Front of House';
+      const role = emp.role || 'Server';
+      if (!byDept[dept]) byDept[dept] = {};
+      if (!byDept[dept][role]) byDept[dept][role] = [];
+      byDept[dept][role].push({
+        name: emp.name,
+        avatar: getAvatar(emp.name),
+        _id: emp._id,
+      });
+    }
+    return Object.entries(byDept).map(([name, roles]) => ({
+      name,
       color: 'bg-blue-900',
-      roles: [
-        {
-          name: 'Server',
-          color: 'bg-orange-100',
-          employees: [
-            { name: 'Alex Rodriguez', avatar: 'AR', hours: 0 },
-            { name: 'Sarah Chen', avatar: 'SC', hours: 6 },
-            { name: 'Morgan Davis', avatar: 'MD', hours: 0 },
-            { name: 'Riley Martinez', avatar: 'RM', hours: 0 },
-            { name: 'Jordan Lee', avatar: 'JL', hours: 6 },
-            { name: 'Casey Brown', avatar: 'CB', hours: 0 },
-            { name: 'Jamie Wilson', avatar: 'JW', hours: 0 },
-          ],
-        },
-      ],
-    },
-    {
-      name: 'Bar',
-      color: 'bg-blue-900',
-      roles: [
-        {
-          name: 'Bartender',
-          color: 'bg-green-100',
-          employees: [
-            { name: 'Taylor Kim', avatar: 'TK', hours: 6 },
-          ],
-        },
-      ],
-    },
-  ];
+      roles: Object.entries(roles).map(([roleName, employees]) => ({
+        name: roleName,
+        color: roleColors[roleName] || 'bg-gray-100',
+        employees,
+      })),
+    }));
+  }, [apiEmployees]);
 
   const handleCellClick = (employee: string, date: string, role: string) => {
     setSelectedCell({ employee, date, role });
@@ -148,9 +155,11 @@ export function ScheduleBuilder({ onClose, token }: Props) {
       endTime: newShift.endTime,
       role: selectedCell.role,
     };
+    const emp = apiEmployees.find((e: any) => e.name === shift.employeeName);
     api.createShift(
       {
         employee: shift.employeeName,
+        employeeId: emp?._id,
         role: shift.role,
         startTime: shift.startTime,
         endTime: shift.endTime,
@@ -174,13 +183,14 @@ export function ScheduleBuilder({ onClose, token }: Props) {
     setShifts(shifts.filter((shift, i) => (id ? (shift as any)._id !== id : i !== index)));
   };
 
+  const empName = (s: any) => s.employeeName || s.employee;
   const getShiftsForCell = (employeeName: string, date: string) => {
-    return shifts.filter(s => s.employeeName === employeeName && s.date === date);
+    return shifts.filter((s) => empName(s) === employeeName && s.date === date);
   };
 
   const getTotalHours = (employeeName: string) => {
     return shifts
-      .filter(s => s.employeeName === employeeName)
+      .filter((s) => empName(s) === employeeName)
       .reduce((total, shift) => total + calculateShiftDurationHours(shift.startTime, shift.endTime), 0);
   };
 
@@ -354,7 +364,7 @@ export function ScheduleBuilder({ onClose, token }: Props) {
                                             onClick={(e) => {
                                             e.stopPropagation();
                                             const index = shifts.findIndex(
-                                              s => s.employeeName === shift.employeeName &&
+                                              s => empName(s) === empName(shift) &&
                                                    s.date === shift.date &&
                                                    s.startTime === shift.startTime
                                             );
@@ -398,7 +408,7 @@ export function ScheduleBuilder({ onClose, token }: Props) {
               <div key={index} className="text-center text-sm">
                 <div className="font-medium">{formatHours(dayTotal)}h</div>
                 <div className="text-xs text-gray-500">
-                  ${shifts.filter(s => s.date === day.fullDate).reduce((sum, s) => sum + calculateShiftDurationHours(s.startTime, s.endTime) * getHourlyRate(s.employeeName), 0).toFixed(2)}
+                  ${shifts.filter(s => s.date === day.fullDate).reduce((sum, s) => sum + calculateShiftDurationHours(s.startTime, s.endTime) * getHourlyRate(empName(s)), 0).toFixed(2)}
                 </div>
               </div>
             );

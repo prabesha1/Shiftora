@@ -53,10 +53,13 @@ const calculateDurationHours = (startTime, endTime) => {
 
 async function getDb() {
   if (db) return db;
-  client = new MongoClient(MONGO_URI);
+  client = new MongoClient(MONGO_URI, {
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 10000,
+  });
   await client.connect();
   db = client.db();
-  console.log(`Connected to MongoDB at ${MONGO_URI}`);
+  console.log('Connected to MongoDB');
   if (!seeded) {
     await seed(db);
     seeded = true;
@@ -84,10 +87,16 @@ const authMiddleware = async (req, res, next) => {
 
 app.get('/api/health', async (_req, res) => {
   try {
-    await getDb();
-    res.json({ status: 'ok' });
+    const database = await getDb();
+    await database.command({ ping: 1 });
+    const collections = await database.listCollections().toArray();
+    res.json({
+      status: 'ok',
+      database: 'connected',
+      collections: collections.map((c) => c.name),
+    });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
+    res.status(500).json({ status: 'error', database: 'disconnected', message: error.message });
   }
 });
 
@@ -117,7 +126,13 @@ app.post('/api/auth/register', async (req, res) => {
   });
 
   const token = signToken({ ...userDoc, _id: userResult.insertedId });
-  res.json({ id: userResult.insertedId, name, email, role, token });
+  res.json({
+    id: userResult.insertedId.toString(),
+    name,
+    email,
+    role,
+    token,
+  });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -129,7 +144,30 @@ app.post('/api/auth/login', async (req, res) => {
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return res.status(400).json({ message: 'Invalid credentials' });
   const token = signToken(user);
-  res.json({ id: user._id, name: user.name, email: user.email, role: user.role, token });
+  res.json({
+    id: user._id.toString(),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    token,
+  });
+});
+
+app.patch('/api/auth/change-password', authMiddleware, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Current and new password required' });
+  if (newPassword.length < 6) return res.status(400).json({ message: 'New password must be at least 6 characters' });
+  const database = await getDb();
+  const user = await database.collection('users').findOne({ _id: new ObjectId(req.user.id) });
+  if (!user) return res.status(404).json({ message: 'User not found' });
+  const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!ok) return res.status(400).json({ message: 'Current password is incorrect' });
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await database.collection('users').updateOne(
+    { _id: new ObjectId(req.user.id) },
+    { $set: { passwordHash } }
+  );
+  res.json({ message: 'Password updated successfully' });
 });
 
 // EMPLOYEES CRUD
@@ -140,15 +178,39 @@ app.get('/api/employees', authMiddleware, async (_req, res) => {
 });
 
 app.post('/api/employees', authMiddleware, async (req, res) => {
-  const employee = req.body || {};
-  if (!employee.name) return res.status(400).json({ message: 'Name required' });
+  const { name, email, password, role, department, level, hourlyRate } = req.body || {};
+  if (!name || !email) return res.status(400).json({ message: 'Name and email required' });
   const database = await getDb();
-  const result = await database.collection('employees').insertOne({
-    ...employee,
-    status: employee.status || 'active',
-    joinDate: employee.joinDate || new Date().toISOString(),
-  });
-  res.status(201).json({ _id: result.insertedId, ...employee });
+
+  const existingUser = await database.collection('users').findOne({ email });
+  if (existingUser) return res.status(400).json({ message: 'Email already registered' });
+
+  let userId = null;
+  if (password && password.length >= 6) {
+    const passwordHash = await bcrypt.hash(password, 10);
+    const userRole = role === 'Manager' ? 'manager' : 'employee';
+    const userResult = await database.collection('users').insertOne({
+      name,
+      email,
+      passwordHash,
+      role: userRole,
+    });
+    userId = userResult.insertedId;
+  }
+
+  const employeeDoc = {
+    userId,
+    name,
+    email,
+    role: role || 'Server',
+    department: department || 'Front of House',
+    level: level || 'Employee',
+    hourlyRate: Number(hourlyRate) || 16,
+    status: 'active',
+    joinDate: new Date().toISOString(),
+  };
+  const result = await database.collection('employees').insertOne(employeeDoc);
+  res.status(201).json({ _id: result.insertedId, ...employeeDoc });
 });
 
 app.patch('/api/employees/:id', authMiddleware, async (req, res) => {
@@ -570,17 +632,17 @@ app.get('/api/reports/employee/weekly', authMiddleware, async (req, res) => {
   res.json({ weeks });
 });
 
-// Seed with a manager/admin for quick use
+// Seed with demo accounts for quick use
 async function seed(database) {
   const usersCol = database.collection('users');
   const employeesCol = database.collection('employees');
-  const existing = await usersCol.findOne({ email: 'manager@shiftora.test' });
-  if (!existing) {
-    const passwordHash = await bcrypt.hash('password123', 10);
+
+  if (!(await usersCol.findOne({ email: 'manager@shiftora.test' }))) {
+    const pw = await bcrypt.hash('password123', 10);
     const manager = await usersCol.insertOne({
       name: 'Demo Manager',
       email: 'manager@shiftora.test',
-      passwordHash,
+      passwordHash: pw,
       role: 'manager',
     });
     await employeesCol.insertOne({
@@ -594,6 +656,29 @@ async function seed(database) {
       status: 'active',
       joinDate: new Date().toISOString(),
     });
+    console.log('Seeded: manager@shiftora.test / password123');
+  }
+
+  if (!(await usersCol.findOne({ email: 'employee@shiftora.test' }))) {
+    const pw = await bcrypt.hash('password123', 10);
+    const emp = await usersCol.insertOne({
+      name: 'Demo Employee',
+      email: 'employee@shiftora.test',
+      passwordHash: pw,
+      role: 'employee',
+    });
+    await employeesCol.insertOne({
+      userId: emp.insertedId,
+      name: 'Demo Employee',
+      email: 'employee@shiftora.test',
+      role: 'Server',
+      department: 'Front of House',
+      level: 'Employee',
+      hourlyRate: 16,
+      status: 'active',
+      joinDate: new Date().toISOString(),
+    });
+    console.log('Seeded: employee@shiftora.test / password123');
   }
 }
 

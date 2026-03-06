@@ -28,8 +28,9 @@ Shiftora is a full‑stack scheduling, time‑tracking, and labor reporting app 
 
 For a step‑by‑step Atlas vs. local walkthrough (and common pitfalls), see `docs/shiftora-detailed-setup.md`.
 
-## Seeded demo account
-- Manager: `manager@shiftora.test` / `password123` (created on first API start). Use to log into the manager dashboard immediately.
+## Seeded demo accounts (created on first API start)
+- **Manager:** `manager@shiftora.test` / `password123`
+- **Employee:** `employee@shiftora.test` / `password123`
 
 ## Available npm scripts
 - `npm run dev` – Vite dev server for the frontend.
@@ -76,6 +77,7 @@ For a step‑by‑step Atlas vs. local walkthrough (and common pitfalls), see `d
 - **Reports:** `GET /api/reports/daily?date=` for a specific day; `GET /api/reports/overview` for today + trailing 7‑day summary.
 
 ## Troubleshooting
+- **Login stuck or "Cannot reach server":** Start the API first: `npm run server` (in one terminal), then `npm run dev` (in another). The frontend needs the API at `http://localhost:4000`.
 - **Cannot connect to Mongo:** verify `MONGO_URI`, that `mongod` is running (local) or Atlas IP access rules include your IP; check logs when running `npm run server`.
 - **401 Invalid token:** ensure you include `Authorization: Bearer <token>` in protected calls; re-login if token expired.
 - **CORS errors from frontend:** confirm `VITE_API_BASE` points to the running API origin and restart `npm run dev` after env changes.

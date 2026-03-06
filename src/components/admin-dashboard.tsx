@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { formatLongDate } from '../utils/time';
 import { api } from '../api/client';
+import { DateTimePanel } from './datetime-panel';
 
 type Props = {
   onNavigate: (page: string) => void;
@@ -192,6 +193,7 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
+            <DateTimePanel />
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-white">
               <Crown className="w-5 h-5" />
             </div>

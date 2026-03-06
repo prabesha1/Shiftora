@@ -26,14 +26,9 @@ export function LoginPage({ onNavigate, onLoginSuccess, mode = 'login' }: Props)
       const user = mode === 'signup'
         ? await api.register({ name, email, password, role })
         : await api.login(email, password);
-      if (role && user.role !== role) {
-        setError(`User role mismatch. Your account is ${user.role}.`);
-        setLoading(false);
-        return;
-      }
       onLoginSuccess(user);
     } catch (err: any) {
-      setError(err.message || 'Login failed');
+      setError(err.message || 'Login failed. Check that the server is running and try again.');
     } finally {
       setLoading(false);
     }
@@ -100,19 +95,21 @@ export function LoginPage({ onNavigate, onLoginSuccess, mode = 'login' }: Props)
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="role">Role</Label>
-              <Select value={role} onValueChange={setRole}>
-                <SelectTrigger className="rounded-xl h-11">
-                  <SelectValue placeholder="Select your role" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="admin">Admin</SelectItem>
-                  <SelectItem value="manager">Manager</SelectItem>
-                  <SelectItem value="employee">Employee</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {mode === 'signup' && (
+              <div className="space-y-2">
+                <Label htmlFor="role">Role</Label>
+                <Select value={role} onValueChange={setRole}>
+                  <SelectTrigger className="rounded-xl h-11">
+                    <SelectValue placeholder="Select your role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="admin">Admin</SelectItem>
+                    <SelectItem value="manager">Manager</SelectItem>
+                    <SelectItem value="employee">Employee</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <Button 
               onClick={handleLogin}

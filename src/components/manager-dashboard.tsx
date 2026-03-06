@@ -7,6 +7,7 @@ import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
 import { ScheduleBuilder } from './schedule-builder';
+import { DateTimePanel } from './datetime-panel';
 import { Clock, Mail, Phone, MapPin, Building2, Shield, Settings, Bell, Trash2 } from 'lucide-react';
 import { addDays, calculateShiftDurationHours, formatHours, formatLongDate, formatMonthDay, startOfWeek, toISODate } from '../utils/time';
 import { api } from '../api/client';
@@ -96,7 +97,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   const [dailyReport, setDailyReport] = useState<any>(null);
   const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
   const [newEmployee, setNewEmployee] = useState({
-    name: '', email: '', role: 'Server', department: 'Front of House', hourlyRate: 16
+    name: '', email: '', password: '', role: 'Server', department: 'Front of House', hourlyRate: 16
   });
   const onHolidayEmployees: Employee[] = [];
   
@@ -220,21 +221,26 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   };
 
   const handleAddEmployee = async () => {
-    const { name, email, role, department, hourlyRate } = newEmployee;
+    const { name, email, password, role, department, hourlyRate } = newEmployee;
     if (!name || !email) {
       setConfirmationMessage('Name and email are required.');
       setTimeout(() => setConfirmationMessage(null), 3000);
       return;
     }
+    if (!password || password.length < 6) {
+      setConfirmationMessage('Password must be at least 6 characters so the employee can sign in.');
+      setTimeout(() => setConfirmationMessage(null), 3000);
+      return;
+    }
     try {
       const created = await api.createEmployee(
-        { name, email, role, department, level: 'Employee', hourlyRate: Number(hourlyRate), status: 'active' },
+        { name, email, password, role, department, level: 'Employee', hourlyRate: Number(hourlyRate), status: 'active' },
         user.token
       );
       setEmployees((prev) => [...prev, created as Employee]);
-      setNewEmployee({ name: '', email: '', role: 'Server', department: 'Front of House', hourlyRate: 16 });
+      setNewEmployee({ name: '', email: '', password: '', role: 'Server', department: 'Front of House', hourlyRate: 16 });
       setShowAddEmployeeModal(false);
-      setConfirmationMessage(`${name} has been added to the team!`);
+      setConfirmationMessage(`${name} has been added to the team! They can sign in with this email and password.`);
     } catch (err: any) {
       setConfirmationMessage(err.message || 'Failed to add employee.');
     }
@@ -317,6 +323,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
+            <DateTimePanel />
             <button
               onClick={() => setShowManagerProfile(true)}
               className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white hover:shadow-lg hover:scale-105 transition-all cursor-pointer"
@@ -952,6 +959,18 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                 onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
                 className="rounded-xl h-11"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="emp-password">Initial Password (min 6 chars)</Label>
+              <Input
+                id="emp-password"
+                type="password"
+                placeholder="Employee can change this later"
+                value={newEmployee.password}
+                onChange={(e) => setNewEmployee({ ...newEmployee, password: e.target.value })}
+                className="rounded-xl h-11"
+              />
+              <p className="text-xs text-muted-foreground">Employee will use this to sign in and can change it in their dashboard.</p>
             </div>
             <div className="space-y-2">
               <Label>Role</Label>
