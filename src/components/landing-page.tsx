@@ -55,7 +55,7 @@ export function LandingPage({ onNavigate }: Props) {
             </h1>
             
             <p className="text-xl text-gray-600 max-w-lg">
-              Shift Up helps small restaurants manage shifts, swaps, and daily wages & tips. 
+              Shiftora helps small restaurants manage shifts, swaps, and daily wages & tips. 
               Built for teams that need clarity and simplicity.
             </p>
             
@@ -202,7 +202,7 @@ export function LandingPage({ onNavigate }: Props) {
         <div className="max-w-md mx-auto">
           <div className="bg-white rounded-3xl p-8 shadow-xl shadow-blue-200/50 border-2 border-blue-200 space-y-6">
             <div>
-              <h3 className="text-2xl mb-2">Shift Up</h3>
+              <h3 className="text-2xl mb-2">Shiftora</h3>
               <div className="flex items-baseline gap-2">
                 <span className="text-4xl">$0</span>
                 <span className="text-gray-500">/forever</span>
@@ -263,7 +263,7 @@ export function LandingPage({ onNavigate }: Props) {
       {/* Footer */}
       <footer className="border-t border-gray-200 bg-white/50 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-6 py-8 text-center text-gray-600">
-          © 2025 Shiftora by T38. Built for small restaurant teams.
+          © 2026 Shiftora by T38. Built for small restaurant teams.
         </div>
       </footer>
     </div>

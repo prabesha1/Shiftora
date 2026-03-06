@@ -29,7 +29,7 @@ type Employee = {
   joinDate: string;
 };
 
-export function AdminDashboard({ onNavigate }: Props) {
+export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
   const currentHour = new Date().getHours();
   const greeting = currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
   const todayLabel = formatLongDate(new Date());
@@ -402,7 +402,7 @@ export function AdminDashboard({ onNavigate }: Props) {
                 <span className="font-medium">Average Hourly Rate</span>
               </div>
               <div className="text-3xl font-medium text-green-700">
-                ${(employees.reduce((sum, emp) => sum + emp.hourlyRate, 0) / employees.length).toFixed(2)}
+                ${employees.length ? (employees.reduce((sum, emp) => sum + emp.hourlyRate, 0) / employees.length).toFixed(2) : '0.00'}
               </div>
               <div className="text-sm text-gray-600 mt-2">Across all employees</div>
             </div>

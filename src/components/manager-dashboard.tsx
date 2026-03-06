@@ -15,7 +15,7 @@ import { useEffect } from 'react';
 type Props = {
   onNavigate: (page: string) => void;
   onLogout: () => void;
-  user: { id: string; name: string; role: string; token: string };
+  user: { id: string; name: string; email?: string; role: string; token: string };
 };
 
 type Shift = {
@@ -93,6 +93,11 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   const [tipAmount, setTipAmount] = useState<string>('');
   const [tipNotes, setTipNotes] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [dailyReport, setDailyReport] = useState<any>(null);
+  const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
+  const [newEmployee, setNewEmployee] = useState({
+    name: '', email: '', role: 'Server', department: 'Front of House', hourlyRate: 16
+  });
   const onHolidayEmployees: Employee[] = [];
   
   // Create shift form state
@@ -214,22 +219,49 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     setTimeout(() => setConfirmationMessage(null), 3000);
   };
 
+  const handleAddEmployee = async () => {
+    const { name, email, role, department, hourlyRate } = newEmployee;
+    if (!name || !email) {
+      setConfirmationMessage('Name and email are required.');
+      setTimeout(() => setConfirmationMessage(null), 3000);
+      return;
+    }
+    try {
+      const created = await api.createEmployee(
+        { name, email, role, department, level: 'Employee', hourlyRate: Number(hourlyRate), status: 'active' },
+        user.token
+      );
+      setEmployees((prev) => [...prev, created as Employee]);
+      setNewEmployee({ name: '', email: '', role: 'Server', department: 'Front of House', hourlyRate: 16 });
+      setShowAddEmployeeModal(false);
+      setConfirmationMessage(`${name} has been added to the team!`);
+    } catch (err: any) {
+      setConfirmationMessage(err.message || 'Failed to add employee.');
+    }
+    setTimeout(() => setConfirmationMessage(null), 3000);
+  };
+
+  const week1StartIso = toISODate(week1Start);
+  const week2EndIso = toISODate(week2End);
+
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        const [empList, shiftList, punchList, tipList, requestList] = await Promise.all([
+        const [empList, shiftList, punchList, tipList, requestList, report] = await Promise.all([
           api.getEmployees(user.token),
-          api.getShifts({ start: toISODate(week1Start), end: toISODate(week2End) }, user.token),
+          api.getShifts({ start: week1StartIso, end: week2EndIso }, user.token),
           api.getPunches({}, user.token),
           api.getTips(todayIso, user.token),
           api.getRequests('pending', user.token),
+          api.getDailyReport(todayIso, user.token),
         ]);
         setEmployees(empList as Employee[]);
         setShifts(shiftList as Shift[]);
         setPunches(punchList as Punch[]);
         setTips(tipList as any[]);
         setRequests(requestList as SwapRequest[]);
+        setDailyReport(report);
       } catch (err: any) {
         setConfirmationMessage(err.message || 'Failed to load data.');
       } finally {
@@ -240,15 +272,21 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
 
     const interval = setInterval(async () => {
       try {
-        const requestList = await api.getRequests('pending', user.token);
+        const [requestList, report, tipList] = await Promise.all([
+          api.getRequests('pending', user.token),
+          api.getDailyReport(todayIso, user.token),
+          api.getTips(todayIso, user.token),
+        ]);
         setRequests(requestList as SwapRequest[]);
+        setDailyReport(report);
+        setTips(tipList as any[]);
       } catch {
         // ignore polling errors
       }
-    }, 8000);
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, [user.token, week1Start, week2End, todayIso]);
+  }, [user.token, week1StartIso, week2EndIso, todayIso]);
 
   return (
     <div className="min-h-screen">
@@ -283,7 +321,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
               onClick={() => setShowManagerProfile(true)}
               className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white hover:shadow-lg hover:scale-105 transition-all cursor-pointer"
             >
-              P
+              {user.name ? user.name[0].toUpperCase() : 'M'}
             </button>
             <Button 
               variant="ghost" 
@@ -342,7 +380,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
               <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
                 <RefreshCw className="w-5 h-5 text-amber-600" />
               </div>
-              <span className="text-3xl">5</span>
+              <span className="text-3xl">{swapRequests.length}</span>
             </div>
             <div className="text-gray-600">Open swap requests</div>
             <div className="text-sm text-amber-600 mt-2">Review now →</div>
@@ -379,6 +417,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => {
                     const dateIso = toISODate(addDays(week1Start, index));
                     const isToday = dateIso === todayIso;
+                    const dayShiftCount = shifts.filter(s => s.date === dateIso).length;
                     return (
                       <div 
                         key={`w1-${day}`}
@@ -389,7 +428,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                       >
                         <div className="text-xs text-gray-500 mb-1">{day}</div>
                         <div className={`${isToday ? 'text-blue-700' : ''}`}>
-                          {[4, 5, 6, 5, 7, 8, 6][index]}
+                          {dayShiftCount}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">shifts</div>
                       </div>
@@ -406,6 +445,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => {
                     const dateIso = toISODate(addDays(week2Start, index));
                     const isToday = dateIso === todayIso;
+                    const dayShiftCount = shifts.filter(s => s.date === dateIso).length;
                     return (
                       <div 
                         key={`w2-${day}`}
@@ -416,7 +456,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                       >
                         <div className="text-xs text-gray-500 mb-1">{day}</div>
                         <div className={`${isToday ? 'text-blue-700' : 'text-gray-400'}`}>
-                          {[5, 6, 4, 6, 8, 9, 7][index]}
+                          {dayShiftCount}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">shifts</div>
                       </div>
@@ -680,12 +720,12 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
             <div className="grid grid-cols-2 gap-4">
               <div className="p-4 rounded-xl bg-gradient-to-br from-purple-50 to-purple-100/50 border border-purple-100">
                 <div className="text-sm text-gray-600 mb-1">Total wages</div>
-                <div className="text-2xl">$1,240</div>
+                <div className="text-2xl">${dailyReport ? dailyReport.totalWages.toFixed(2) : '0.00'}</div>
               </div>
 
               <div className="p-4 rounded-xl bg-gradient-to-br from-green-50 to-green-100/50 border border-green-100">
                 <div className="text-sm text-gray-600 mb-1">Total tips</div>
-                <div className="text-2xl">$280</div>
+                <div className="text-2xl">${dailyReport ? dailyReport.totalTips.toFixed(2) : '0.00'}</div>
               </div>
             </div>
 
@@ -804,17 +844,26 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       <Dialog open={showEmployeesModal} onOpenChange={setShowEmployeesModal}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-2xl">Team Members</DialogTitle>
+            <DialogTitle className="text-2xl">All Employees</DialogTitle>
             <DialogDescription>
-              All active employees and those currently on holiday
+              Manage your team — add, view, or remove employees
             </DialogDescription>
           </DialogHeader>
+          <div className="flex justify-end mt-2">
+            <Button
+              className="rounded-full bg-[#2563EB] hover:bg-[#1d4ed8]"
+              onClick={() => setShowAddEmployeeModal(true)}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Employee
+            </Button>
+          </div>
           
           <div className="space-y-6 mt-4">
             <div>
               <h3 className="font-medium mb-3 flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-[#22C55E]" />
-                Active Employees ({employees.length})
+                All Employees ({employees.length})
               </h3>
               <div className="space-y-2">
                 {employees.map((employee, index) => (
@@ -868,6 +917,89 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Employee Modal */}
+      <Dialog open={showAddEmployeeModal} onOpenChange={setShowAddEmployeeModal}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">Add New Employee</DialogTitle>
+            <DialogDescription>
+              Add a new team member to your restaurant
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <div className="space-y-2">
+              <Label htmlFor="emp-name">Full Name</Label>
+              <Input
+                id="emp-name"
+                placeholder="e.g. Jane Doe"
+                value={newEmployee.name}
+                onChange={(e) => setNewEmployee({ ...newEmployee, name: e.target.value })}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="emp-email">Email</Label>
+              <Input
+                id="emp-email"
+                type="email"
+                placeholder="jane@restaurant.com"
+                value={newEmployee.email}
+                onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Role</Label>
+              <Select value={newEmployee.role} onValueChange={(v) => setNewEmployee({ ...newEmployee, role: v })}>
+                <SelectTrigger className="rounded-xl h-11"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['Server', 'Bartender', 'Chef', 'Manager'].map((r) => (
+                    <SelectItem key={r} value={r}>{r}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Department</Label>
+              <Select value={newEmployee.department} onValueChange={(v) => setNewEmployee({ ...newEmployee, department: v })}>
+                <SelectTrigger className="rounded-xl h-11"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['Front of House', 'Kitchen', 'Bar', 'Management'].map((d) => (
+                    <SelectItem key={d} value={d}>{d}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="emp-rate">Hourly Rate ($)</Label>
+              <Input
+                id="emp-rate"
+                type="number"
+                min="0"
+                value={newEmployee.hourlyRate}
+                onChange={(e) => setNewEmployee({ ...newEmployee, hourlyRate: Number(e.target.value) })}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button
+                variant="outline"
+                className="flex-1 rounded-full h-11"
+                onClick={() => setShowAddEmployeeModal(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1 rounded-full h-11 bg-[#2563EB] hover:bg-[#1d4ed8]"
+                onClick={handleAddEmployee}
+              >
+                Add Employee
+              </Button>
             </div>
           </div>
         </DialogContent>
@@ -993,7 +1125,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   <SelectValue placeholder="Select a role" />
                 </SelectTrigger>
                 <SelectContent>
-                  {['Server', 'Host', 'Bartender', 'Chef', 'Manager'].map((role) => (
+                  {['Server', 'Bartender', 'Chef', 'Manager'].map((role) => (
                     <SelectItem key={role} value={role}>
                       {role}
                     </SelectItem>
@@ -1115,10 +1247,10 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
             {/* Profile Header */}
             <div className="flex items-center gap-4 p-6 rounded-2xl bg-gradient-to-br from-purple-50 to-purple-100/50 border border-purple-100">
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white text-3xl">
-                P
+                {user.name ? user.name[0].toUpperCase() : 'M'}
               </div>
               <div className="flex-1">
-                <h3 className="text-2xl">Prabesh Shrestha</h3>
+                <h3 className="text-2xl">{user.name || 'Manager'}</h3>
                 <p className="text-gray-600">Restaurant Manager</p>
                 <div className="flex items-center gap-2 mt-2">
                   <Badge className="bg-[#2563EB]">Manager</Badge>
@@ -1139,7 +1271,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                     <Mail className="w-4 h-4 text-gray-400" />
                     <span className="text-sm text-gray-600">Email</span>
                   </div>
-                  <div className="font-medium">Prabesh.Shrestha@georgebrown.ca</div>
+                  <div className="font-medium">{user.email || 'Not provided'}</div>
                 </div>
                 <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
                   <div className="flex items-center gap-2 mb-2">
@@ -1178,18 +1310,18 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                 <Shield className="w-4 h-4 text-[#2563EB]" />
                 Account Overview
               </h3>
-              <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-3 gap-4">
                 <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 text-center">
-                  <div className="text-2xl font-medium text-blue-700">8</div>
+                  <div className="text-2xl font-medium text-blue-700">{employees.length}</div>
                   <div className="text-sm text-gray-600 mt-1">Team Members</div>
                 </div>
                 <div className="p-4 rounded-xl bg-green-50 border border-green-100 text-center">
-                  <div className="text-2xl font-medium text-green-700">156</div>
+                  <div className="text-2xl font-medium text-green-700">{shifts.length}</div>
                   <div className="text-sm text-gray-600 mt-1">Total Shifts</div>
                 </div>
                 <div className="p-4 rounded-xl bg-purple-50 border border-purple-100 text-center">
-                  <div className="text-2xl font-medium text-purple-700">3</div>
-                  <div className="text-sm text-gray-600 mt-1">Months Active</div>
+                  <div className="text-2xl font-medium text-purple-700">{swapRequests.length}</div>
+                  <div className="text-sm text-gray-600 mt-1">Open Requests</div>
                 </div>
               </div>
             </div>

@@ -1,18 +1,25 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const path = require('path');
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/shiftora';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-shiftora-secret';
+if (!process.env.JWT_SECRET) {
+  console.warn('WARNING: JWT_SECRET not set — using insecure default. Set JWT_SECRET in .env for production.');
+}
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || true,
+  credentials: true,
+}));
 app.use(express.json());
 
 let client;
@@ -88,6 +95,7 @@ app.get('/api/health', async (_req, res) => {
 app.post('/api/auth/register', async (req, res) => {
   const { name, email, password, role = 'employee', hourlyRate = 16 } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ message: 'Missing fields' });
+  if (password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters' });
   const database = await getDb();
   const existing = await database.collection('users').findOne({ email });
   if (existing) return res.status(400).json({ message: 'Email already registered' });
@@ -144,10 +152,18 @@ app.post('/api/employees', authMiddleware, async (req, res) => {
 });
 
 app.patch('/api/employees/:id', authMiddleware, async (req, res) => {
+  const allowedFields = ['name', 'email', 'role', 'department', 'level', 'hourlyRate', 'status', 'phone'];
+  const updates = {};
+  for (const key of allowedFields) {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ message: 'No valid fields to update' });
+  }
   const database = await getDb();
   await database
     .collection('employees')
-    .updateOne({ _id: new ObjectId(req.params.id) }, { $set: req.body });
+    .updateOne({ _id: new ObjectId(req.params.id) }, { $set: updates });
   res.json({ updated: true });
 });
 
@@ -300,8 +316,7 @@ app.get('/api/requests', authMiddleware, async (req, res) => {
   res.json(requests);
 });
 
-app.post('/api/requests', async (req, res) => {
-  // For demo simplicity, allow unauthenticated creation; add auth if needed.
+app.post('/api/requests', authMiddleware, async (req, res) => {
   const { employee, employeeId, shift, role, reason, type = 'swap' } = req.body || {};
   if (!employee || !shift || !role || !reason) {
     return res.status(400).json({ message: 'Missing fields' });
@@ -437,8 +452,8 @@ async function buildWeekly(database, today) {
   let totalTips = 0;
   let totalRevenue = 0;
   let hoursWorked = 0;
-  for (const dateStr of dates) {
-    const daily = await buildDailyReport(database, dateStr);
+  const reports = await Promise.all(dates.map((dateStr) => buildDailyReport(database, dateStr)));
+  for (const daily of reports) {
     totalWages += daily?.totalWages || 0;
     totalTips += daily?.totalTips || 0;
     hoursWorked += daily?.totalHours || 0;
@@ -582,9 +597,19 @@ async function seed(database) {
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`Shiftora API listening on http://localhost:${PORT}`);
-});
+async function start() {
+  try {
+    await getDb();
+    app.listen(PORT, () => {
+      console.log(`Shiftora API listening on http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error('Failed to start server:', err.message);
+    process.exit(1);
+  }
+}
+
+start();
 
 process.on('SIGINT', async () => {
   if (client) {

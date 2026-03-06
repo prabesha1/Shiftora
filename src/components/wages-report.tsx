@@ -22,9 +22,10 @@ type Props = {
 };
 
 export function WagesReport({ onNavigate, user }: Props) {
-  const reportDate = new Date();
+  const [selectedDate, setSelectedDate] = useState(toISODate(new Date()));
+  const reportDateISO = selectedDate;
+  const reportDate = new Date(selectedDate + 'T00:00:00');
   const reportDateLabel = formatLongDate(reportDate);
-  const reportDateISO = toISODate(reportDate);
 
   const [employeeData, setEmployeeData] = useState<any[]>([]);
   const [totalWages, setTotalWages] = useState(0);
@@ -172,7 +173,8 @@ export function WagesReport({ onNavigate, user }: Props) {
                 <Calendar className="w-5 h-5 text-gray-400" />
                 <Input 
                   type="date" 
-                  defaultValue={reportDateISO}
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
                   className="rounded-xl h-10 border-gray-200"
                 />
               </div>

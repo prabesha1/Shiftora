@@ -91,7 +91,7 @@ export const api = {
   // Requests (swap/leave)
   getRequests: (status?: string, token?: string) =>
     request<Request[]>(`/api/requests${status ? `?status=${status}` : ''}`, 'GET', undefined, token),
-  createRequest: (data: any) => request<Request>('/api/requests', 'POST', data),
+  createRequest: (data: any, token?: string) => request<Request>('/api/requests', 'POST', data, token),
   updateRequest: (id: string, data: { status: string; managerNote?: string }, token?: string) =>
     request(`/api/requests/${id}`, 'PATCH', data, token),
 };

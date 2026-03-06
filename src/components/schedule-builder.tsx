@@ -39,6 +39,23 @@ export function ScheduleBuilder({ onClose, token }: Props) {
     endTime: '',
   });
 
+  const [apiEmployees, setApiEmployees] = useState<any[]>([]);
+
+  useEffect(() => {
+    const loadEmployees = async () => {
+      try {
+        const emps = await api.getEmployees(token);
+        setApiEmployees(emps as any[]);
+      } catch {}
+    };
+    loadEmployees();
+  }, [token]);
+
+  const getHourlyRate = (employeeName: string) => {
+    const emp = apiEmployees.find((e: any) => e.name === employeeName);
+    return emp?.hourlyRate || 16;
+  };
+
   const generateWeekDays = (anchor: Date) => (
     Array.from({ length: 14 }, (_, index) => {
       const date = addDays(anchor, index);
@@ -87,12 +104,6 @@ export function ScheduleBuilder({ onClose, token }: Props) {
             { name: 'Sarah Chen', avatar: 'SC', hours: 6 },
             { name: 'Morgan Davis', avatar: 'MD', hours: 0 },
             { name: 'Riley Martinez', avatar: 'RM', hours: 0 },
-          ],
-        },
-        {
-          name: 'Host',
-          color: 'bg-purple-100',
-          employees: [
             { name: 'Jordan Lee', avatar: 'JL', hours: 6 },
             { name: 'Casey Brown', avatar: 'CB', hours: 0 },
             { name: 'Jamie Wilson', avatar: 'JW', hours: 0 },
@@ -307,7 +318,7 @@ export function ScheduleBuilder({ onClose, token }: Props) {
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-medium truncate">{employee.name}</div>
                             <div className="text-xs text-gray-500">
-                              {formatHours(totalHours)}h · ${(totalHours * 30).toFixed(2)}
+                              {formatHours(totalHours)}h · ${(totalHours * getHourlyRate(employee.name)).toFixed(2)}
                             </div>
                           </div>
                         </div>
@@ -386,7 +397,9 @@ export function ScheduleBuilder({ onClose, token }: Props) {
             return (
               <div key={index} className="text-center text-sm">
                 <div className="font-medium">{formatHours(dayTotal)}h</div>
-                <div className="text-xs text-gray-500">${(dayTotal * 30).toFixed(2)}</div>
+                <div className="text-xs text-gray-500">
+                  ${shifts.filter(s => s.date === day.fullDate).reduce((sum, s) => sum + calculateShiftDurationHours(s.startTime, s.endTime) * getHourlyRate(s.employeeName), 0).toFixed(2)}
+                </div>
               </div>
             );
           })}
@@ -451,7 +464,7 @@ export function ScheduleBuilder({ onClose, token }: Props) {
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-gray-600">Estimated pay:</span>
                   <span className="font-medium text-[#22C55E]">
-                    ${(calculateShiftDurationHours(newShift.startTime, newShift.endTime) * 30).toFixed(2)}
+                    ${(calculateShiftDurationHours(newShift.startTime, newShift.endTime) * getHourlyRate(selectedCell?.employee || '')).toFixed(2)}
                   </span>
                 </div>
               </div>
