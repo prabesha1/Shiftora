@@ -49,7 +49,7 @@ For a step‑by‑step Atlas vs. local walkthrough (and common pitfalls), see `d
 - **Employees:** `GET /api/employees`, `POST /api/employees`, `PATCH /api/employees/:id`, `DELETE /api/employees/:id` (auth required).
 - **Shifts:** `GET /api/shifts?employeeId=&start=&end=`, `POST /api/shifts`, `DELETE /api/shifts/:id`.
 - **Tips:** `GET /api/tips?date=YYYY-MM-DD`, `POST /api/tips`.
-- **Punches:** `GET /api/punches?employeeId=`, `POST /api/punches/clock-in`, `POST /api/punches/clock-out`, `POST /api/punches/break-start`, `POST /api/punches/break-end`.
+- **Punches:** `GET /api/punches?employeeId=`, `POST /api /punches/clock-in`, `POST /api/punches/clock-out`, `POST /api/punches/break-start`, `POST /api/punches/break-end`.
 - **Reports:** `GET /api/reports/daily?date=YYYY-MM-DD`, `GET /api/reports/overview`.
 - **Health:** `GET /api/health`.
 
