@@ -42,7 +42,13 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [changePasswordForm, setChangePasswordForm] = useState({ current: '', new: '', confirm: '' });
   const [changePasswordMessage, setChangePasswordMessage] = useState<string | null>(null);
+  const [liveTime, setLiveTime] = useState(() => new Date());
   const todayIso = toISODate(new Date());
+
+  useEffect(() => {
+    const t = setInterval(() => setLiveTime(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const deriveStatusFromPunches = (records: any[]): PunchStatus => {
     if (!records.length) return 'not-punched-in';
@@ -198,20 +204,18 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
               <p className="text-gray-600">Ready to start your shift?</p>
             </div>
 
-            <div className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50">
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <Calendar className="w-4 h-4 text-blue-600" />
-                    <span className="font-medium">{shift.day}</span>
-                  </div>
-                  <div className="text-gray-600">{shift.time}</div>
-                </div>
-                <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
+            <div className="p-5 rounded-2xl border-2 border-blue-200 bg-blue-50">
+              <div className="flex items-center gap-2 text-blue-700 mb-2">
+                <Calendar className="w-5 h-5" />
+                <span className="font-semibold">Today&apos;s shift</span>
               </div>
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <Clock className="w-4 h-4" />
-                <span>{shift.hours} hours scheduled</span>
+              <div className="text-xl font-bold text-gray-900">{shift.day}</div>
+              <div className="text-gray-600 mb-2">{shift.time}</div>
+              <div className="flex items-center justify-between">
+                <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
+                <span className="text-sm text-gray-600">
+                  {shift.hours > 0 ? `${shift.hours} hrs scheduled` : 'No shift scheduled'}
+                </span>
               </div>
             </div>
 
@@ -301,104 +305,141 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
           <p className="text-gray-600">View your schedule, request swaps, and track your earnings.</p>
         </div>
 
-        {/* Punch In/Out and Break Buttons */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl">Time Clock</h2>
+        {/* Time Clock - Punch In/Out */}
+        <div className="bg-white rounded-2xl shadow-lg shadow-gray-200/50 border border-gray-100 overflow-hidden">
+          {/* Status header */}
+          <div className={`px-6 py-4 flex items-center justify-between ${
+            punchStatus === 'punched-in' ? 'bg-emerald-50 border-b border-emerald-100' :
+            punchStatus === 'on-break' ? 'bg-amber-50 border-b border-amber-100' :
+            'bg-gray-50 border-b border-gray-100'
+          }`}>
+            <h2 className="text-xl font-semibold text-gray-800">Time Clock</h2>
             {punchStatus === 'punched-in' && (
-              <Badge className="rounded-full bg-[#22C55E] hover:bg-[#22C55E]">Active</Badge>
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500 text-white text-sm font-medium">
+                <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                Clocked In
+              </span>
             )}
             {punchStatus === 'on-break' && (
-              <Badge className="rounded-full bg-amber-500 hover:bg-amber-500">On Break</Badge>
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500 text-white text-sm font-medium">
+                <Coffee className="w-4 h-4" />
+                On Break
+              </span>
             )}
             {punchStatus === 'not-punched-in' && (
-              <Badge variant="secondary" className="rounded-full">Not Punched In</Badge>
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gray-200 text-gray-600 text-sm font-medium">
+                <Clock className="w-4 h-4" />
+                Ready to clock in
+              </span>
             )}
           </div>
 
-          <div className="p-4 rounded-xl border-2 border-blue-200 bg-blue-50/50">
-            <div className="flex items-start justify-between mb-2">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <Calendar className="w-4 h-4 text-blue-600" />
-                  <span className="font-medium">{shift.day}</span>
+          <div className="p-6 space-y-6">
+            {/* Live clock + shift info row */}
+            <div className="flex flex-col sm:flex-row gap-6 items-stretch">
+              {/* Large live clock display */}
+              <div className="flex-1 min-w-0 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 p-6 text-white flex flex-col items-center justify-center">
+                <div className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-1">Current time</div>
+                <div className="text-4xl sm:text-5xl font-mono font-bold tabular-nums">
+                  {liveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
                 </div>
-                <div className="text-gray-600">{shift.time}</div>
+                <div className="text-sm text-slate-400 mt-1">
+                  {liveTime.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                </div>
               </div>
-              <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Clock className="w-4 h-4" />
-              <span>{shift.hours} hours scheduled</span>
-            </div>
-          </div>
 
-          {punchStatus !== 'not-punched-in' && (
-            <div className="p-4 rounded-xl bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-gray-600 mb-1">
-                    {punchStatus === 'punched-in' ? 'Punched in at' : 'On break since'}
-                  </div>
-                  <div className="font-medium text-lg">
-                    {punchStatus === 'punched-in' ? punchInTime : breakStartTime}
-                  </div>
+              {/* Today's shift card */}
+              <div className="flex-1 min-w-0 rounded-2xl border-2 border-blue-200 bg-blue-50/60 p-5">
+                <div className="flex items-center gap-2 text-blue-700 mb-2">
+                  <Calendar className="w-5 h-5" />
+                  <span className="font-semibold">Today&apos;s shift</span>
                 </div>
-                <div className="w-12 h-12 rounded-full bg-[#22C55E] flex items-center justify-center">
-                  {punchStatus === 'punched-in' ? (
-                    <Clock className="w-6 h-6 text-white" />
-                  ) : (
-                    <Coffee className="w-6 h-6 text-white" />
-                  )}
+                <div className="text-2xl font-bold text-gray-900 mb-1">{shift.day}</div>
+                <div className="text-lg text-gray-700 mb-2">{shift.time}</div>
+                <div className="flex items-center justify-between">
+                  <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
+                  <span className="text-sm text-gray-600">
+                    {shift.hours > 0 ? `${shift.hours} hrs scheduled` : 'No shift scheduled'}
+                  </span>
                 </div>
               </div>
             </div>
-          )}
 
-          <div className="grid grid-cols-1 gap-3">
-            {punchStatus === 'not-punched-in' && (
-              <Button
-                size="lg"
-                className="w-full rounded-2xl h-14 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-lg shadow-orange-200"
-                onClick={handlePunchIn}
-              >
-                <LogIn className="w-5 h-5 mr-2" />
-                Punch In
-              </Button>
+            {/* Punch status card - when clocked in or on break */}
+            {punchStatus !== 'not-punched-in' && (
+              <div className={`rounded-2xl p-6 flex items-center justify-between ${
+                punchStatus === 'punched-in'
+                  ? 'bg-gradient-to-r from-emerald-50 to-green-50 border-2 border-emerald-200'
+                  : 'bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200'
+              }`}>
+                <div className="flex items-center gap-4">
+                  <div className={`w-16 h-16 rounded-2xl flex items-center justify-center ${
+                    punchStatus === 'punched-in' ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`}>
+                    {punchStatus === 'punched-in' ? (
+                      <Clock className="w-8 h-8 text-white" />
+                    ) : (
+                      <Coffee className="w-8 h-8 text-white" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-gray-600">
+                      {punchStatus === 'punched-in' ? 'Clocked in at' : 'Break started at'}
+                    </div>
+                    <div className="text-3xl font-bold text-gray-900 tabular-nums">
+                      {punchStatus === 'punched-in' ? punchInTime : breakStartTime}
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
 
-            {punchStatus === 'punched-in' && (
-              <div className="grid grid-cols-2 gap-3">
+            {/* Action buttons */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {punchStatus === 'not-punched-in' && (
                 <Button
                   size="lg"
-                  className="rounded-2xl h-14 bg-amber-500 hover:bg-amber-600"
-                  onClick={() => setShowBreakModal(true)}
+                  className="w-full rounded-2xl h-16 text-lg font-semibold bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-lg shadow-orange-200"
+                  onClick={handlePunchIn}
                 >
-                  <Coffee className="w-5 h-5 mr-2" />
-                  Start Break
+                  <LogIn className="w-6 h-6 mr-3" />
+                  Punch In
                 </Button>
+              )}
+
+              {punchStatus === 'punched-in' && (
+                <>
+                  <Button
+                    size="lg"
+                    className="rounded-2xl h-16 text-lg font-semibold bg-amber-500 hover:bg-amber-600"
+                    onClick={() => setShowBreakModal(true)}
+                  >
+                    <Coffee className="w-6 h-6 mr-3" />
+                    Start Break
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="rounded-2xl h-16 text-lg font-semibold border-2 border-red-200 text-red-600 hover:bg-red-50"
+                    onClick={() => setShowPunchOutModal(true)}
+                  >
+                    <LogOut className="w-6 h-6 mr-3" />
+                    Punch Out
+                  </Button>
+                </>
+              )}
+
+              {punchStatus === 'on-break' && (
                 <Button
                   size="lg"
-                  variant="outline"
-                  className="rounded-2xl h-14 border-2 border-red-200 text-red-600 hover:bg-red-50"
-                  onClick={() => setShowPunchOutModal(true)}
+                  className="w-full sm:col-span-2 rounded-2xl h-16 text-lg font-semibold bg-emerald-500 hover:bg-emerald-600"
+                  onClick={handleEndBreak}
                 >
-                  <LogOut className="w-5 h-5 mr-2" />
-                  Punch Out
+                  <Coffee className="w-6 h-6 mr-3" />
+                  End Break & Resume
                 </Button>
-              </div>
-            )}
-
-            {punchStatus === 'on-break' && (
-              <Button
-                size="lg"
-                className="w-full rounded-2xl h-14 bg-[#22C55E] hover:bg-[#22C55E]/90"
-                onClick={handleEndBreak}
-              >
-                <Coffee className="w-5 h-5 mr-2" />
-                End Break
-              </Button>
-            )}
+              )}
+            </div>
           </div>
         </div>
 

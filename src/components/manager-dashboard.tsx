@@ -134,7 +134,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     };
   });
 
-  const todaysShifts = shifts.filter(shift => shift.date === todayIso);
+  const todaysShifts = shifts.filter(shift => (shift.date || '').split('T')[0] === todayIso);
 
   const handleApproveRequest = (employeeName: string, type: string) => {
     setConfirmationMessage(`${type === 'swap' ? 'Swap' : 'Leave'} request from ${employeeName} has been approved!`);
@@ -250,6 +250,15 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   const week1StartIso = toISODate(week1Start);
   const week2EndIso = toISODate(week2End);
 
+  const refreshShifts = async () => {
+    try {
+      const shiftList = await api.getShifts({ start: week1StartIso, end: week2EndIso }, user.token);
+      setShifts(shiftList as Shift[]);
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -297,7 +306,13 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   return (
     <div className="min-h-screen">
       {showScheduleBuilder ? (
-        <ScheduleBuilder token={user.token} onClose={() => setShowScheduleBuilder(false)} />
+        <ScheduleBuilder
+          token={user.token}
+          onClose={() => {
+            setShowScheduleBuilder(false);
+            refreshShifts();
+          }}
+        />
       ) : (
         <>
       {/* Navbar */}
@@ -359,7 +374,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
               <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
                 <Calendar className="w-5 h-5 text-blue-600" />
               </div>
-              <span className="text-3xl">{shifts.filter(s => s.date === todayIso).length}</span>
+              <span className="text-3xl">{shifts.filter(s => (s.date || '').split('T')[0] === todayIso).length}</span>
             </div>
             <div className="text-gray-600">Shifts today</div>
             <div className="text-sm text-[#2563EB] mt-2">View all →</div>
@@ -424,7 +439,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => {
                     const dateIso = toISODate(addDays(week1Start, index));
                     const isToday = dateIso === todayIso;
-                    const dayShiftCount = shifts.filter(s => s.date === dateIso).length;
+                    const dayShiftCount = shifts.filter(s => (s.date || '').split('T')[0] === dateIso).length;
                     return (
                       <div 
                         key={`w1-${day}`}
@@ -452,7 +467,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => {
                     const dateIso = toISODate(addDays(week2Start, index));
                     const isToday = dateIso === todayIso;
-                    const dayShiftCount = shifts.filter(s => s.date === dateIso).length;
+                    const dayShiftCount = shifts.filter(s => (s.date || '').split('T')[0] === dateIso).length;
                     return (
                       <div 
                         key={`w2-${day}`}
@@ -1227,7 +1242,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           </DialogHeader>
           
           <div className="space-y-3 mt-4">
-            {shifts.filter(shift => shift.date === selectedDay?.date).map((shift, index) => (
+            {shifts.filter(shift => (shift.date || '').split('T')[0] === selectedDay?.date).map((shift, index) => (
               <div key={index} className="p-4 rounded-xl border border-gray-200 bg-gray-50">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
