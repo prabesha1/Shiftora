@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { ScheduleBuilder } from './schedule-builder';
 import { DateTimePanel } from './datetime-panel';
-import { Clock, Mail, Phone, MapPin, Building2, Shield, Settings, Bell, Trash2 } from 'lucide-react';
+import { Clock, Mail, Phone, MapPin, Building2, Shield, Settings, Bell, Trash2, LogIn, LogOut, Coffee } from 'lucide-react';
 import { addDays, calculateShiftDurationHours, formatHours, formatLongDate, formatMonthDay, startOfWeek, toISODate } from '../utils/time';
 import { api } from '../api/client';
 import { useEffect } from 'react';
@@ -99,6 +99,11 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   const [newEmployee, setNewEmployee] = useState({
     name: '', email: '', password: '', role: 'Server', department: 'Front of House', hourlyRate: 16
   });
+  const [managerProfile, setManagerProfile] = useState({ name: '', dob: '', address: '', phone: '' });
+  const [managerProfileEditing, setManagerProfileEditing] = useState(false);
+  const [managerPasswordForm, setManagerPasswordForm] = useState({ current: '', new: '', confirm: '' });
+  const [managerProfileMessage, setManagerProfileMessage] = useState<string | null>(null);
+  const [showAllPunchesModal, setShowAllPunchesModal] = useState(false);
   const onHolidayEmployees: Employee[] = [];
   
   // Create shift form state
@@ -112,8 +117,14 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
 
   const swapRequests = requests.filter((r) => r.status === 'pending');
 
+  const managerEmployee = employees.find((e) => e.email === user.email || String((e as any).userId) === user.id);
+  const managerPunch = punches.find((p) => (p.employeeId === managerEmployee?._id || p.employeeId === user.id) && !p.clockOut);
+  const managerPunchStatus = managerPunch
+    ? (managerPunch.breaks?.some((b: any) => !b.end) ? 'break' : 'working')
+    : 'punched_out';
+
   const liveEmployeeStatus = employees.map((emp) => {
-    const openPunch = punches.find((p) => p.employeeId === emp._id && !p.clockOut);
+    const openPunch = punches.find((p) => (p.employeeId === emp._id || p.employeeId === String((emp as any).userId ?? '')) && !p.clockOut);
     const lastBreak = openPunch?.breaks?.[openPunch.breaks.length - 1];
     const durationMinutes = openPunch ? Math.max(0, (Date.now() - new Date(openPunch.clockIn).getTime()) / 60000) : 0;
     const status = openPunch
@@ -260,6 +271,16 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   };
 
   useEffect(() => {
+    const loadProfile = async () => {
+      try {
+        const p = await api.getProfile(user.token);
+        setManagerProfile({ name: p.name || '', dob: p.dob || '', address: p.address || '', phone: p.phone || '' });
+      } catch {}
+    };
+    loadProfile();
+  }, [user.token, showManagerProfile]);
+
+  useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
@@ -287,14 +308,16 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
 
     const interval = setInterval(async () => {
       try {
-        const [requestList, report, tipList] = await Promise.all([
+        const [requestList, report, tipList, punchList] = await Promise.all([
           api.getRequests('pending', user.token),
           api.getDailyReport(todayIso, user.token),
           api.getTips(todayIso, user.token),
+          api.getPunches({}, user.token),
         ]);
         setRequests(requestList as SwapRequest[]);
         setDailyReport(report);
         setTips(tipList as any[]);
+        setPunches(punchList as Punch[]);
       } catch {
         // ignore polling errors
       }
@@ -362,6 +385,130 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
         <div className="space-y-2">
           <h1 className="text-4xl">{greeting}, {user.name || 'Manager'}.</h1>
           <p className="text-gray-600">Here's what's happening with your team today.</p>
+        </div>
+
+        {/* Manager Time Clock - Top */}
+        <div className="rounded-2xl border-2 border-orange-300 bg-orange-100 shadow-md overflow-hidden">
+          <div className="px-6 py-4 flex items-center justify-between" style={{ backgroundColor: managerPunchStatus === 'working' ? '#d1fae5' : managerPunchStatus === 'break' ? '#fef3c7' : '#ffedd5', borderBottom: managerPunchStatus === 'working' ? '2px solid #6ee7b7' : managerPunchStatus === 'break' ? '2px solid #fbbf24' : '2px solid #fdba74' }}>
+            <h2 className="text-xl font-bold" style={{ color: managerPunchStatus === 'working' ? '#065f46' : managerPunchStatus === 'break' ? '#92400e' : '#9a3412' }}>My Time Clock</h2>
+            {managerPunchStatus === 'working' && (
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-semibold text-white" style={{ backgroundColor: '#059669' }}>
+                <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                Punched In
+              </span>
+            )}
+            {managerPunchStatus === 'break' && (
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-semibold text-white" style={{ backgroundColor: '#d97706' }}>
+                <Coffee className="w-4 h-4" />
+                On Break
+              </span>
+            )}
+            {managerPunchStatus === 'punched_out' && (
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-semibold text-white" style={{ backgroundColor: '#ea580c' }}>
+                <LogIn className="w-4 h-4" />
+                Not Punched In
+              </span>
+            )}
+          </div>
+
+          <div className="p-6 bg-white space-y-4">
+            {/* Status info row */}
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm" style={{ backgroundColor: managerPunchStatus === 'working' ? '#059669' : managerPunchStatus === 'break' ? '#d97706' : '#ea580c' }}>
+                {managerPunchStatus === 'working' ? <Clock className="w-7 h-7 text-white" /> : managerPunchStatus === 'break' ? <Coffee className="w-7 h-7 text-white" /> : <LogIn className="w-7 h-7 text-white" />}
+              </div>
+              <div>
+                <div className="text-lg font-bold text-gray-900">
+                  {managerPunchStatus === 'working' ? 'Currently Working' : managerPunchStatus === 'break' ? 'On Break' : 'Ready to punch in'}
+                </div>
+                {managerPunch ? (
+                  <div className="text-sm text-gray-600">
+                    Punched in at {new Date(managerPunch.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500">Don't forget to punch in for your shift!</div>
+                )}
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {managerPunchStatus === 'punched_out' && (
+                <button
+                  className="sm:col-span-2 inline-flex items-center justify-center gap-3 rounded-2xl px-6 py-4 text-base font-bold text-white shadow-lg transition-all"
+                  style={{ backgroundColor: '#ea580c' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#c2410c')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ea580c')}
+                  onClick={async () => {
+                    try {
+                      await api.clockIn({ employeeId: managerEmployee?._id || user.id }, user.token);
+                      const p = await api.getPunches({}, user.token);
+                      setPunches(p as Punch[]);
+                    } catch (e: any) {
+                      setConfirmationMessage(e.message || 'Failed to punch in');
+                    }
+                  }}
+                >
+                  <LogIn className="w-5 h-5" />
+                  Punch In
+                </button>
+              )}
+              {managerPunchStatus === 'working' && (
+                <>
+                  <button
+                    className="inline-flex items-center justify-center gap-3 rounded-2xl border-2 border-amber-400 px-6 py-4 text-base font-bold transition-all"
+                    style={{ backgroundColor: '#fef3c7', color: '#92400e' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#fde68a')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#fef3c7')}
+                    onClick={async () => {
+                      try {
+                        await api.breakStart({ employeeId: managerEmployee?._id || user.id }, user.token);
+                        const p = await api.getPunches({}, user.token);
+                        setPunches(p as Punch[]);
+                      } catch {}
+                    }}
+                  >
+                    <Coffee className="w-5 h-5" />
+                    Start Break
+                  </button>
+                  <button
+                    className="inline-flex items-center justify-center gap-3 rounded-2xl border-2 border-red-400 px-6 py-4 text-base font-bold transition-all"
+                    style={{ backgroundColor: '#fef2f2', color: '#b91c1c' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#fecaca')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#fef2f2')}
+                    onClick={async () => {
+                      try {
+                        await api.clockOut({ employeeId: managerEmployee?._id || user.id }, user.token);
+                        const p = await api.getPunches({}, user.token);
+                        setPunches(p as Punch[]);
+                      } catch {}
+                    }}
+                  >
+                    <LogOut className="w-5 h-5" />
+                    Punch Out
+                  </button>
+                </>
+              )}
+              {managerPunchStatus === 'break' && (
+                <button
+                  className="sm:col-span-2 inline-flex items-center justify-center gap-3 rounded-2xl px-6 py-4 text-base font-bold text-white shadow-lg transition-all"
+                  style={{ backgroundColor: '#059669' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#047857')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+                  onClick={async () => {
+                    try {
+                      await api.breakEnd({ employeeId: managerEmployee?._id || user.id }, user.token);
+                      const p = await api.getPunches({}, user.token);
+                      setPunches(p as Punch[]);
+                    } catch {}
+                  }}
+                >
+                  <Coffee className="w-5 h-5" />
+                  End Break & Resume
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Stats Row */}
@@ -568,7 +715,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl">Live employee status</h2>
-              <p className="text-xs text-gray-500 mt-1">Real-time clock-in/out transparency</p>
+              <p className="text-xs text-gray-500 mt-1">Real-time punch in/out transparency</p>
             </div>
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5">
@@ -657,47 +804,79 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
         </div>
 
-        {/* Time Punches */}
+        {/* Time Punches - All Staff (latest 4) */}
         <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xl">Time punches</h2>
-              <p className="text-xs text-gray-500 mt-1">Clock in/out and breaks (live from DB)</p>
+              <h2 className="text-xl">Time Punches</h2>
+              <p className="text-xs text-gray-500 mt-1">All punch in/out and break records</p>
             </div>
             <Badge variant="secondary" className="rounded-full">{punches.length} records</Badge>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="text-left text-gray-500">
-                  <th className="py-2 pr-4">Employee</th>
-                  <th className="py-2 pr-4">Clock in</th>
-                  <th className="py-2 pr-4">Clock out</th>
-                  <th className="py-2 pr-4">Breaks</th>
-                </tr>
-              </thead>
-              <tbody>
-                {punches.slice(0, 10).map((punch) => (
-                  <tr key={punch._id} className="border-t border-gray-200">
-                    <td className="py-2 pr-4">{punch.employeeName}</td>
-                    <td className="py-2 pr-4">{new Date(punch.clockIn).toLocaleString()}</td>
-                    <td className="py-2 pr-4">{punch.clockOut ? new Date(punch.clockOut).toLocaleString() : '—'}</td>
-                    <td className="py-2 pr-4">
-                      {punch.breaks && punch.breaks.length
-                        ? punch.breaks.map((b: any, idx: number) => (
-                            <span key={idx} className="mr-2">
-                              {new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-
-                              {b.end ? new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '…'}
-                            </span>
-                          ))
-                        : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-3">
+            {[...punches].sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime()).slice(0, 4).map((punch) => {
+              const punchInTime = new Date(punch.clockIn);
+              const punchOutTime = punch.clockOut ? new Date(punch.clockOut) : null;
+              const duration = punchOutTime ? Math.round((punchOutTime.getTime() - punchInTime.getTime()) / 60000) : null;
+              return (
+                <div key={punch._id} className="p-4 rounded-xl border border-gray-200 hover:border-gray-300 bg-gray-50/50 flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-semibold">
+                      {punch.employeeName?.slice(0, 2).toUpperCase() || '—'}
+                    </div>
+                    <div>
+                      <div className="font-medium text-gray-900">{punch.employeeName}</div>
+                      <div className="text-xs text-gray-500">
+                        {punchInTime.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                    <div>
+                      <div className="text-xs text-gray-500">Punch in</div>
+                      <div className="font-medium tabular-nums">{punchInTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Punch out</div>
+                      <div className="font-medium tabular-nums">{punchOutTime ? punchOutTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Duration</div>
+                      <div className="font-medium">{duration != null ? `${Math.floor(duration / 60)}h ${duration % 60}m` : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Breaks</div>
+                      <div className="font-medium">
+                        {punch.breaks && punch.breaks.length
+                          ? punch.breaks.map((b: any, idx: number) => (
+                              <span key={idx} className="block text-xs">
+                                {new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                {b.end ? ` – ${new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ' (active)'}
+                              </span>
+                            ))
+                          : '—'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
+          {punches.length === 0 && (
+            <div className="p-8 text-center text-gray-500 rounded-xl border border-dashed border-gray-200">
+              No punch records yet
+            </div>
+          )}
+          {punches.length > 4 && (
+            <button
+              onClick={() => setShowAllPunchesModal(true)}
+              className="w-full py-3 rounded-xl border-2 border-dashed border-blue-200 text-[#2563EB] font-semibold hover:bg-blue-50 transition-colors flex items-center justify-center gap-2"
+            >
+              See all {punches.length} records
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Bottom Two Column Layout */}
@@ -1267,154 +1446,202 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
         </DialogContent>
       </Dialog>
 
+      {/* All Time Punches Modal (Full-screen overlay) */}
+      {showAllPunchesModal && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 overflow-y-auto py-8">
+          <div className="w-full max-w-4xl mx-4 bg-white rounded-2xl shadow-2xl">
+            {/* Header */}
+            <div className="sticky top-0 z-10 px-6 py-5 border-b border-gray-200 bg-white rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">All Time Punches</h2>
+                <p className="text-sm text-gray-500 mt-1">{punches.length} records — latest first</p>
+              </div>
+              <button
+                onClick={() => setShowAllPunchesModal(false)}
+                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Records */}
+            <div className="p-6 space-y-3">
+              {punches.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50">
+                  <Clock className="w-12 h-12 text-gray-300 mb-3" />
+                  <p className="font-medium text-gray-600">No punch records yet</p>
+                </div>
+              ) : (
+                [...punches]
+                  .sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime())
+                  .map((punch) => {
+                    const pIn = new Date(punch.clockIn);
+                    const pOut = punch.clockOut ? new Date(punch.clockOut) : null;
+                    const dur = pOut ? Math.round((pOut.getTime() - pIn.getTime()) / 60000) : null;
+                    const isActive = !pOut;
+                    return (
+                      <div
+                        key={punch._id}
+                        className={`rounded-xl border p-4 ${
+                          isActive ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-gray-50 hover:bg-white'
+                        } transition-colors`}
+                      >
+                        {/* Top: Employee name + date + active badge */}
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold ${
+                            isActive ? 'bg-emerald-600' : 'bg-blue-600'
+                          }`}>
+                            {punch.employeeName?.slice(0, 2).toUpperCase() || '—'}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-gray-900">{punch.employeeName}</div>
+                            <div className="text-xs text-gray-500">
+                              {pIn.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                            </div>
+                          </div>
+                          {isActive && (
+                            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-600 text-white">Active</span>
+                          )}
+                          {dur != null && (
+                            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">
+                              {Math.floor(dur / 60)}h {dur % 60}m
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Bottom: Times row */}
+                        <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm pl-[52px]">
+                          <div>
+                            <span className="text-gray-500">In: </span>
+                            <span className="font-semibold tabular-nums text-emerald-700">
+                              {pIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-gray-500">Out: </span>
+                            <span className={`font-semibold tabular-nums ${pOut ? 'text-red-600' : 'text-amber-600'}`}>
+                              {pOut ? pOut.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
+                            </span>
+                          </div>
+                          {punch.breaks && punch.breaks.length > 0 && (
+                            <div>
+                              <span className="text-gray-500">Breaks: </span>
+                              {punch.breaks.map((b: any, i: number) => (
+                                <span key={i} className="font-medium text-amber-700">
+                                  {i > 0 && ', '}
+                                  {new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  {b.end ? `–${new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ' (active)'}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Manager Profile Modal */}
       <Dialog open={showManagerProfile} onOpenChange={setShowManagerProfile}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-2xl">Manager Profile</DialogTitle>
-            <DialogDescription>
-              View and manage your account information
-            </DialogDescription>
+            <DialogDescription>View and manage your account information</DialogDescription>
           </DialogHeader>
-          
           <div className="space-y-6 mt-4">
-            {/* Profile Header */}
+            {managerProfileMessage && (
+              <div className={`p-3 rounded-lg text-sm ${managerProfileMessage.startsWith('Updated') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                {managerProfileMessage}
+              </div>
+            )}
             <div className="flex items-center gap-4 p-6 rounded-2xl bg-gradient-to-br from-purple-50 to-purple-100/50 border border-purple-100">
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white text-3xl">
-                {user.name ? user.name[0].toUpperCase() : 'M'}
+                {(managerProfile.name || user.name)?.[0]?.toUpperCase() || 'M'}
               </div>
               <div className="flex-1">
-                <h3 className="text-2xl">{user.name || 'Manager'}</h3>
-                <p className="text-gray-600">Restaurant Manager</p>
-                <div className="flex items-center gap-2 mt-2">
-                  <Badge className="bg-[#2563EB]">Manager</Badge>
-                  <Badge variant="secondary">Full Access</Badge>
-                </div>
+                <h3 className="text-2xl">{managerProfile.name || user.name || 'Manager'}</h3>
+                <p className="text-gray-600">{user.email}</p>
+                <Badge className="bg-[#2563EB] mt-2">Manager</Badge>
               </div>
             </div>
 
-            {/* Contact Information */}
             <div className="space-y-4">
-              <h3 className="font-medium flex items-center gap-2">
-                <Mail className="w-4 h-4 text-[#2563EB]" />
-                Contact Information
-              </h3>
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Mail className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm text-gray-600">Email</span>
-                  </div>
-                  <div className="font-medium">{user.email || 'Not provided'}</div>
+              <h3 className="font-medium">Profile Information</h3>
+              <div className="grid gap-4">
+                <div className="space-y-2">
+                  <Label>Full Name</Label>
+                  <Input disabled={!managerProfileEditing} value={managerProfile.name} onChange={(e) => setManagerProfile({ ...managerProfile, name: e.target.value })} className="rounded-xl" />
                 </div>
-                <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Phone className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm text-gray-600">Phone</span>
-                  </div>
-                  <div className="font-medium">+1 555 555-5555</div>
+                <div className="space-y-2">
+                  <Label>Date of Birth</Label>
+                  <Input type="date" disabled={!managerProfileEditing} value={managerProfile.dob} onChange={(e) => setManagerProfile({ ...managerProfile, dob: e.target.value })} className="rounded-xl" />
                 </div>
+                <div className="space-y-2">
+                  <Label>Address</Label>
+                  <Input disabled={!managerProfileEditing} value={managerProfile.address} placeholder="Street, City, State, ZIP" onChange={(e) => setManagerProfile({ ...managerProfile, address: e.target.value })} className="rounded-xl" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Phone</Label>
+                  <Input disabled={!managerProfileEditing} value={managerProfile.phone} placeholder="Phone number" onChange={(e) => setManagerProfile({ ...managerProfile, phone: e.target.value })} className="rounded-xl" />
+                </div>
+              </div>
+              {managerProfileEditing ? (
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setManagerProfileEditing(false)}>Cancel</Button>
+                  <Button onClick={async () => {
+                    try {
+                      await api.updateProfile(managerProfile, user.token);
+                      setManagerProfileMessage('Profile updated.');
+                      setManagerProfileEditing(false);
+                      setTimeout(() => setManagerProfileMessage(null), 3000);
+                    } catch (e: any) {
+                      setManagerProfileMessage(e.message || 'Failed to update');
+                    }
+                  }}>Save</Button>
+                </div>
+              ) : (
+                <Button variant="outline" onClick={() => setManagerProfileEditing(true)}>Edit Profile</Button>
+              )}
+            </div>
+
+            <div className="space-y-4 border-t pt-6">
+              <h3 className="font-medium">Change Password</h3>
+              <div className="grid gap-4">
+                <div className="space-y-2">
+                  <Label>Current Password</Label>
+                  <Input type="password" value={managerPasswordForm.current} onChange={(e) => setManagerPasswordForm({ ...managerPasswordForm, current: e.target.value })} className="rounded-xl" />
+                </div>
+                <div className="space-y-2">
+                  <Label>New Password (min 6 chars)</Label>
+                  <Input type="password" value={managerPasswordForm.new} onChange={(e) => setManagerPasswordForm({ ...managerPasswordForm, new: e.target.value })} className="rounded-xl" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Confirm New Password</Label>
+                  <Input type="password" value={managerPasswordForm.confirm} onChange={(e) => setManagerPasswordForm({ ...managerPasswordForm, confirm: e.target.value })} className="rounded-xl" />
+                </div>
+                <Button onClick={async () => {
+                  if (managerPasswordForm.new !== managerPasswordForm.confirm) {
+                    setManagerProfileMessage('Passwords do not match.');
+                    return;
+                  }
+                  try {
+                    await api.changePassword(managerPasswordForm.current, managerPasswordForm.new, user.token);
+                    setManagerProfileMessage('Password updated.');
+                    setManagerPasswordForm({ current: '', new: '', confirm: '' });
+                    setTimeout(() => setManagerProfileMessage(null), 3000);
+                  } catch (e: any) {
+                    setManagerProfileMessage(e.message || 'Failed to change password');
+                  }
+                }}>Update Password</Button>
               </div>
             </div>
 
-            {/* Restaurant Information */}
-            <div className="space-y-4">
-              <h3 className="font-medium flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-[#2563EB]" />
-                Restaurant Information
-              </h3>
-              <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 space-y-3">
-                <div>
-                  <div className="text-sm text-gray-600 mb-1">Restaurant Name</div>
-                  <div className="font-medium">Pokhara Restro & Bar</div>
-                </div>
-                <div className="border-t border-gray-200 pt-3">
-                  <div className="flex items-start gap-2 mb-1">
-                    <MapPin className="w-4 h-4 text-gray-400 mt-0.5" />
-                    <span className="text-sm text-gray-600">Address</span>
-                  </div>
-                  <div className="font-medium">123 Main Street, Toronto, ON M5V 2T6</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Account Stats */}
-            <div className="space-y-4">
-              <h3 className="font-medium flex items-center gap-2">
-                <Shield className="w-4 h-4 text-[#2563EB]" />
-                Account Overview
-              </h3>
-                <div className="grid grid-cols-3 gap-4">
-                <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 text-center">
-                  <div className="text-2xl font-medium text-blue-700">{employees.length}</div>
-                  <div className="text-sm text-gray-600 mt-1">Team Members</div>
-                </div>
-                <div className="p-4 rounded-xl bg-green-50 border border-green-100 text-center">
-                  <div className="text-2xl font-medium text-green-700">{shifts.length}</div>
-                  <div className="text-sm text-gray-600 mt-1">Total Shifts</div>
-                </div>
-                <div className="p-4 rounded-xl bg-purple-50 border border-purple-100 text-center">
-                  <div className="text-2xl font-medium text-purple-700">{swapRequests.length}</div>
-                  <div className="text-sm text-gray-600 mt-1">Open Requests</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Settings */}
-            <div className="space-y-4">
-              <h3 className="font-medium flex items-center gap-2">
-                <Settings className="w-4 h-4 text-[#2563EB]" />
-                Quick Settings
-              </h3>
-              <div className="space-y-2">
-                <button className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Bell className="w-5 h-5 text-gray-600" />
-                    <div className="text-left">
-                      <div className="font-medium">Notifications</div>
-                      <div className="text-sm text-gray-600">Manage notification preferences</div>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-gray-400" />
-                </button>
-                <button className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Shield className="w-5 h-5 text-gray-600" />
-                    <div className="text-left">
-                      <div className="font-medium">Privacy & Security</div>
-                      <div className="text-sm text-gray-600">Password and security settings</div>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-gray-400" />
-                </button>
-                <button className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Building2 className="w-5 h-5 text-gray-600" />
-                    <div className="text-left">
-                      <div className="font-medium">Restaurant Settings</div>
-                      <div className="text-sm text-gray-600">Manage restaurant details</div>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-gray-400" />
-                </button>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
             <div className="flex gap-3 pt-4">
-              <Button 
-                variant="outline"
-                className="flex-1 rounded-xl h-12"
-                onClick={() => setShowManagerProfile(false)}
-              >
-                Close
-              </Button>
-              <Button 
-                className="flex-1 rounded-xl h-12 bg-[#2563EB] hover:bg-[#1d4ed8]"
-                onClick={() => setShowManagerProfile(false)}
-              >
-                Edit Profile
-              </Button>
+              <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setShowManagerProfile(false)}>Close</Button>
             </div>
           </div>
         </DialogContent>

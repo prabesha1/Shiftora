@@ -40,6 +40,10 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profile, setProfile] = useState({ name: '', dob: '', address: '', phone: '' });
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [changePasswordForm, setChangePasswordForm] = useState({ current: '', new: '', confirm: '' });
   const [changePasswordMessage, setChangePasswordMessage] = useState<string | null>(null);
   const [liveTime, setLiveTime] = useState(() => new Date());
@@ -49,6 +53,12 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
     const t = setInterval(() => setLiveTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (showProfileModal) {
+      api.getProfile(user.token).then((p) => setProfile({ name: p.name || '', dob: p.dob || '', address: p.address || '', phone: p.phone || '' })).catch(() => {});
+    }
+  }, [showProfileModal, user.token]);
 
   const deriveStatusFromPunches = (records: any[]): PunchStatus => {
     if (!records.length) return 'not-punched-in';
@@ -154,20 +164,23 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
       .filter((s) => s.date >= todayIso)
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))[0];
     if (upcoming) {
+      const isToday = upcoming.date === todayIso;
       const dayLabel = new Date(upcoming.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' });
       const duration = calculateShiftDurationHours(upcoming.startTime, upcoming.endTime);
       return {
-        day: dayLabel,
+        day: isToday ? dayLabel : dayLabel,
         time: `${upcoming.startTime} – ${upcoming.endTime}`,
         role: upcoming.role || 'Server',
         hours: duration,
+        isToday,
       };
     }
     return {
-      day: 'Today',
-      time: 'No shift scheduled',
+      day: 'Next shift available',
+      time: 'No upcoming shifts',
       role: 'Server',
       hours: 0,
+      isToday: false,
     };
   };
 
@@ -237,14 +250,16 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
               </div>
             </div>
 
-            <Button
-              size="lg"
-              className="w-full rounded-2xl h-14 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-lg shadow-orange-200"
+            <button
+              className="w-full rounded-2xl h-14 inline-flex items-center justify-center gap-2 text-base font-bold text-white shadow-lg shadow-orange-200 transition-all"
+              style={{ background: 'linear-gradient(to right, #f97316, #ea580c)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'linear-gradient(to right, #ea580c, #c2410c)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'linear-gradient(to right, #f97316, #ea580c)')}
               onClick={handlePunchIn}
             >
-              <LogIn className="w-5 h-5 mr-2" />
+              <LogIn className="w-5 h-5" />
               Punch In & Start Shift
-            </Button>
+            </button>
 
             <button
               onClick={() => setPunchGatePassed(true)}
@@ -274,18 +289,19 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
 
           <div className="flex items-center gap-3">
             <DateTimePanel />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="hidden sm:flex items-center gap-2"
-              onClick={() => setShowChangePasswordModal(true)}
-            >
+            <Button variant="ghost" size="sm" className="hidden sm:flex items-center gap-2" onClick={() => setShowProfileModal(true)}>
+              Profile
+            </Button>
+            <Button variant="ghost" size="sm" className="hidden sm:flex items-center gap-2" onClick={() => setShowChangePasswordModal(true)}>
               <Key className="w-4 h-4" />
               Change Password
             </Button>
-            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white">
+            <button
+              onClick={() => setShowProfileModal(true)}
+              className="w-9 h-9 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white hover:ring-2 hover:ring-green-300 cursor-pointer"
+            >
               {user.name ? user.name[0].toUpperCase() : 'E'}
-            </div>
+            </button>
             <Button 
               variant="ghost" 
               onClick={onLogout}
@@ -306,76 +322,66 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
         </div>
 
         {/* Time Clock - Punch In/Out */}
-        <div className="bg-white rounded-2xl shadow-lg shadow-gray-200/50 border border-gray-100 overflow-hidden">
+        <div className="rounded-2xl border-2 shadow-lg overflow-hidden" style={{ borderColor: punchStatus === 'punched-in' ? '#6ee7b7' : punchStatus === 'on-break' ? '#fbbf24' : '#94a3b8', backgroundColor: punchStatus === 'punched-in' ? '#ecfdf5' : punchStatus === 'on-break' ? '#fffbeb' : '#f1f5f9' }}>
           {/* Status header */}
-          <div className={`px-6 py-4 flex items-center justify-between ${
-            punchStatus === 'punched-in' ? 'bg-emerald-50 border-b border-emerald-100' :
-            punchStatus === 'on-break' ? 'bg-amber-50 border-b border-amber-100' :
-            'bg-gray-50 border-b border-gray-100'
-          }`}>
-            <h2 className="text-xl font-semibold text-gray-800">Time Clock</h2>
+          <div className="px-6 py-4 flex items-center justify-between" style={{ backgroundColor: punchStatus === 'punched-in' ? '#a7f3d0' : punchStatus === 'on-break' ? '#fde68a' : '#cbd5e1', borderBottom: punchStatus === 'punched-in' ? '2px solid #34d399' : punchStatus === 'on-break' ? '2px solid #f59e0b' : '2px solid #94a3b8' }}>
+            <h2 className="text-xl font-bold text-slate-900">Time Clock</h2>
             {punchStatus === 'punched-in' && (
-              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500 text-white text-sm font-medium">
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium text-white" style={{ backgroundColor: '#059669' }}>
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                Clocked In
+                Punched In
               </span>
             )}
             {punchStatus === 'on-break' && (
-              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500 text-white text-sm font-medium">
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium text-white" style={{ backgroundColor: '#d97706' }}>
                 <Coffee className="w-4 h-4" />
                 On Break
               </span>
             )}
             {punchStatus === 'not-punched-in' && (
-              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gray-200 text-gray-600 text-sm font-medium">
-                <Clock className="w-4 h-4" />
-                Ready to clock in
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-semibold text-white" style={{ backgroundColor: '#475569' }}>
+                <LogIn className="w-4 h-4" />
+                Ready to punch in
               </span>
             )}
           </div>
 
-          <div className="p-6 space-y-6">
+          <div className="p-6 space-y-6 bg-white">
             {/* Live clock + shift info row */}
             <div className="flex flex-col sm:flex-row gap-6 items-stretch">
               {/* Large live clock display */}
-              <div className="flex-1 min-w-0 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 p-6 text-white flex flex-col items-center justify-center">
-                <div className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-1">Current time</div>
-                <div className="text-4xl sm:text-5xl font-mono font-bold tabular-nums">
+              <div className="flex-1 min-w-0 rounded-2xl p-6 text-white flex flex-col items-center justify-center border-2 shadow-lg" style={{ backgroundColor: '#1e293b', borderColor: '#475569' }}>
+                <div className="text-sm font-medium uppercase tracking-wider mb-1" style={{ color: '#94a3b8' }}>Current time</div>
+                <div className="text-4xl sm:text-5xl font-mono font-bold tabular-nums text-white">
                   {liveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
                 </div>
-                <div className="text-sm text-slate-400 mt-1">
+                <div className="text-sm mt-1" style={{ color: '#94a3b8' }}>
                   {liveTime.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
                 </div>
               </div>
 
-              {/* Today's shift card */}
-              <div className="flex-1 min-w-0 rounded-2xl border-2 border-blue-200 bg-blue-50/60 p-5">
-                <div className="flex items-center gap-2 text-blue-700 mb-2">
+              {/* Shift card */}
+              <div className="flex-1 min-w-0 rounded-2xl border-2 p-5 shadow-sm" style={{ borderColor: '#60a5fa', backgroundColor: '#bfdbfe' }}>
+                <div className="flex items-center gap-2 mb-2" style={{ color: '#1e3a5f' }}>
                   <Calendar className="w-5 h-5" />
-                  <span className="font-semibold">Today&apos;s shift</span>
+                  <span className="font-bold">{shift.hours > 0 ? "Today's shift" : 'Next shift'}</span>
                 </div>
-                <div className="text-2xl font-bold text-gray-900 mb-1">{shift.day}</div>
-                <div className="text-lg text-gray-700 mb-2">{shift.time}</div>
+                <div className="text-2xl font-bold text-slate-900 mb-1">{shift.day}</div>
+                <div className="text-lg font-semibold text-slate-800 mb-2">{shift.time}</div>
                 <div className="flex items-center justify-between">
-                  <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
-                  <span className="text-sm text-gray-600">
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium text-white" style={{ backgroundColor: '#2563eb' }}>{shift.role}</span>
+                  <span className="text-sm font-medium text-slate-700">
                     {shift.hours > 0 ? `${shift.hours} hrs scheduled` : 'No shift scheduled'}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Punch status card - when clocked in or on break */}
+            {/* Punch status card - when punched in or on break */}
             {punchStatus !== 'not-punched-in' && (
-              <div className={`rounded-2xl p-6 flex items-center justify-between ${
-                punchStatus === 'punched-in'
-                  ? 'bg-gradient-to-r from-emerald-50 to-green-50 border-2 border-emerald-200'
-                  : 'bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200'
-              }`}>
+              <div className="rounded-2xl p-6 flex items-center justify-between border-2" style={{ backgroundColor: punchStatus === 'punched-in' ? '#d1fae5' : '#fef3c7', borderColor: punchStatus === 'punched-in' ? '#34d399' : '#fbbf24' }}>
                 <div className="flex items-center gap-4">
-                  <div className={`w-16 h-16 rounded-2xl flex items-center justify-center ${
-                    punchStatus === 'punched-in' ? 'bg-emerald-500' : 'bg-amber-500'
-                  }`}>
+                  <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ backgroundColor: punchStatus === 'punched-in' ? '#059669' : '#d97706' }}>
                     {punchStatus === 'punched-in' ? (
                       <Clock className="w-8 h-8 text-white" />
                     ) : (
@@ -383,10 +389,10 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                     )}
                   </div>
                   <div>
-                    <div className="text-sm font-medium text-gray-600">
-                      {punchStatus === 'punched-in' ? 'Clocked in at' : 'Break started at'}
+                    <div className="text-sm font-semibold text-slate-700">
+                      {punchStatus === 'punched-in' ? 'Punched in at' : 'Break started at'}
                     </div>
-                    <div className="text-3xl font-bold text-gray-900 tabular-nums">
+                    <div className="text-3xl font-bold text-slate-900 tabular-nums">
                       {punchStatus === 'punched-in' ? punchInTime : breakStartTime}
                     </div>
                   </div>
@@ -396,48 +402,55 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
 
             {/* Action buttons */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {punchStatus === 'not-punched-in' && (
-                <Button
-                  size="lg"
-                  className="w-full rounded-2xl h-16 text-lg font-semibold bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-lg shadow-orange-200"
-                  onClick={handlePunchIn}
-                >
-                  <LogIn className="w-6 h-6 mr-3" />
-                  Punch In
-                </Button>
+            {punchStatus === 'not-punched-in' && (
+              <button
+                className="w-full rounded-2xl h-16 inline-flex items-center justify-center gap-3 text-lg font-bold text-white border-2 shadow-lg transition-all"
+                style={{ backgroundColor: '#ea580c', borderColor: '#c2410c' }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#c2410c')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ea580c')}
+                onClick={handlePunchIn}
+              >
+                <LogIn className="w-6 h-6" />
+                Punch In
+              </button>
               )}
 
               {punchStatus === 'punched-in' && (
                 <>
-                  <Button
-                    size="lg"
-                    className="rounded-2xl h-16 text-lg font-semibold bg-amber-500 hover:bg-amber-600"
+                  <button
+                    className="rounded-2xl h-16 inline-flex items-center justify-center gap-3 text-lg font-bold text-white border-2 transition-all"
+                    style={{ backgroundColor: '#f59e0b', borderColor: '#fbbf24' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#d97706')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#f59e0b')}
                     onClick={() => setShowBreakModal(true)}
                   >
-                    <Coffee className="w-6 h-6 mr-3" />
+                    <Coffee className="w-6 h-6" />
                     Start Break
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className="rounded-2xl h-16 text-lg font-semibold border-2 border-red-200 text-red-600 hover:bg-red-50"
+                  </button>
+                  <button
+                    className="rounded-2xl h-16 inline-flex items-center justify-center gap-3 text-lg font-bold border-2 transition-all"
+                    style={{ backgroundColor: '#fef2f2', borderColor: '#ef4444', color: '#b91c1c' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#fee2e2')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#fef2f2')}
                     onClick={() => setShowPunchOutModal(true)}
                   >
-                    <LogOut className="w-6 h-6 mr-3" />
+                    <LogOut className="w-6 h-6" />
                     Punch Out
-                  </Button>
+                  </button>
                 </>
               )}
 
               {punchStatus === 'on-break' && (
-                <Button
-                  size="lg"
-                  className="w-full sm:col-span-2 rounded-2xl h-16 text-lg font-semibold bg-emerald-500 hover:bg-emerald-600"
+                <button
+                  className="w-full sm:col-span-2 rounded-2xl h-16 inline-flex items-center justify-center gap-3 text-lg font-bold text-white border-2 shadow-lg transition-all"
+                  style={{ backgroundColor: '#059669', borderColor: '#047857' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#047857')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
                   onClick={handleEndBreak}
                 >
-                  <Coffee className="w-6 h-6 mr-3" />
+                  <Coffee className="w-6 h-6" />
                   End Break & Resume
-                </Button>
+                </button>
               )}
             </div>
           </div>
@@ -527,8 +540,11 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                     />
                   </div>
 
-                  <Button 
-                    className="w-full rounded-full h-11 bg-[#2563EB] hover:bg-[#1d4ed8]"
+                  <button 
+                    className="w-full rounded-full h-11 inline-flex items-center justify-center gap-2 text-sm font-medium text-white transition-all"
+                    style={{ backgroundColor: '#2563EB' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#1d4ed8')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#2563EB')}
                     onClick={async () => {
                       if (!shiftSelection) {
                         alert('Select a shift to request a swap.');
@@ -567,7 +583,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                     }}
                   >
                     Send swap request
-                  </Button>
+                  </button>
 
                   <div className="p-4 rounded-xl bg-blue-50 border border-blue-100">
                     <div className="text-sm text-blue-900">
@@ -818,13 +834,16 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             >
               Cancel
             </Button>
-            <Button 
-              className="flex-1 rounded-xl h-11 bg-red-500 hover:bg-red-600"
+            <button
+              className="flex-1 rounded-xl h-11 inline-flex items-center justify-center gap-2 text-sm font-medium text-white transition-all"
+              style={{ backgroundColor: '#ef4444' }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#dc2626')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ef4444')}
               onClick={handlePunchOut}
             >
-              <LogOut className="w-4 h-4 mr-2" />
+              <LogOut className="w-4 h-4" />
               Confirm Punch Out
-            </Button>
+            </button>
           </div>
         </DialogContent>
       </Dialog>
@@ -878,13 +897,16 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             >
               Cancel
             </Button>
-            <Button 
-              className="flex-1 rounded-xl h-11 bg-amber-500 hover:bg-amber-600"
+            <button
+              className="flex-1 rounded-xl h-11 inline-flex items-center justify-center gap-2 text-sm font-medium text-white transition-all"
+              style={{ backgroundColor: '#f59e0b' }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#d97706')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#f59e0b')}
               onClick={handleStartBreak}
             >
-              <Coffee className="w-4 h-4 mr-2" />
+              <Coffee className="w-4 h-4" />
               Start Break
-            </Button>
+            </button>
           </div>
         </DialogContent>
       </Dialog>
@@ -1031,6 +1053,72 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={showProfileModal} onOpenChange={setShowProfileModal}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>My Profile</DialogTitle>
+            <DialogDescription>View and edit your profile information</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            {profileMessage && (
+              <div className={`p-3 rounded-lg text-sm ${profileMessage.startsWith('Updated') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                {profileMessage}
+              </div>
+            )}
+            <div className="flex items-center gap-4 p-4 rounded-xl bg-green-50 border border-green-100">
+              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white text-2xl">
+                {(profile.name || user.name)?.[0]?.toUpperCase() || 'E'}
+              </div>
+              <div>
+                <div className="font-semibold text-lg">{profile.name || user.name}</div>
+                <div className="text-sm text-gray-600">{user.email}</div>
+              </div>
+            </div>
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <Label>Full Name</Label>
+                <Input disabled={!profileEditing} value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} className="rounded-xl" />
+              </div>
+              <div className="space-y-2">
+                <Label>Date of Birth</Label>
+                <Input type="date" disabled={!profileEditing} value={profile.dob} onChange={(e) => setProfile({ ...profile, dob: e.target.value })} className="rounded-xl" />
+              </div>
+              <div className="space-y-2">
+                <Label>Address</Label>
+                <Input disabled={!profileEditing} value={profile.address} placeholder="Street, City, State, ZIP" onChange={(e) => setProfile({ ...profile, address: e.target.value })} className="rounded-xl" />
+              </div>
+              <div className="space-y-2">
+                <Label>Phone</Label>
+                <Input disabled={!profileEditing} value={profile.phone} placeholder="Phone number" onChange={(e) => setProfile({ ...profile, phone: e.target.value })} className="rounded-xl" />
+              </div>
+            </div>
+            {profileEditing ? (
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setProfileEditing(false)}>Cancel</Button>
+                <Button onClick={async () => {
+                  try {
+                    await api.updateProfile(profile, user.token);
+                    setProfileMessage('Profile updated.');
+                    setProfileEditing(false);
+                    setTimeout(() => setProfileMessage(null), 3000);
+                  } catch (e: any) {
+                    setProfileMessage(e.message || 'Failed to update');
+                  }
+                }}>Save</Button>
+              </div>
+            ) : (
+              <Button variant="outline" onClick={() => setProfileEditing(true)}>Edit Profile</Button>
+            )}
+            <div className="border-t pt-4">
+              <Button variant="ghost" className="w-full" onClick={() => { setShowProfileModal(false); setShowChangePasswordModal(true); }}>
+                <Key className="w-4 h-4 mr-2" />
+                Change Password
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showChangePasswordModal} onOpenChange={setShowChangePasswordModal}>
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>
@@ -1087,8 +1175,11 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
               >
                 Cancel
               </Button>
-              <Button
-                className="flex-1 rounded-xl h-11 bg-[#2563EB] hover:bg-[#1d4ed8]"
+              <button
+                className="flex-1 rounded-xl h-11 inline-flex items-center justify-center gap-2 text-sm font-medium text-white transition-all"
+                style={{ backgroundColor: '#2563EB' }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#1d4ed8')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#2563EB')}
                 onClick={async () => {
                   if (changePasswordForm.new !== changePasswordForm.confirm) {
                     setChangePasswordMessage('New passwords do not match.');
@@ -1112,7 +1203,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                 }}
               >
                 Update Password
-              </Button>
+              </button>
             </div>
           </div>
         </DialogContent>

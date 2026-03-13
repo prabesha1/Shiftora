@@ -214,7 +214,7 @@ app.post('/api/employees', authMiddleware, async (req, res) => {
 });
 
 app.patch('/api/employees/:id', authMiddleware, async (req, res) => {
-  const allowedFields = ['name', 'email', 'role', 'department', 'level', 'hourlyRate', 'status', 'phone'];
+  const allowedFields = ['name', 'email', 'role', 'department', 'level', 'hourlyRate', 'status', 'phone', 'dob', 'address'];
   const updates = {};
   for (const key of allowedFields) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -226,6 +226,58 @@ app.patch('/api/employees/:id', authMiddleware, async (req, res) => {
   await database
     .collection('employees')
     .updateOne({ _id: new ObjectId(req.params.id) }, { $set: updates });
+  const emp = await database.collection('employees').findOne({ _id: new ObjectId(req.params.id) });
+  if (updates.name && emp?.userId) {
+    await database.collection('users').updateOne(
+      { _id: emp.userId },
+      { $set: { name: updates.name } }
+    ).catch(() => {});
+  }
+  res.json({ updated: true });
+});
+
+app.get('/api/profile', authMiddleware, async (req, res) => {
+  const database = await getDb();
+  const user = await database.collection('users').findOne({ _id: new ObjectId(req.user.id) });
+  if (!user) return res.status(404).json({ message: 'User not found' });
+  const employee = await database.collection('employees').findOne({ userId: new ObjectId(req.user.id) });
+  res.json({
+    id: user._id.toString(),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    dob: employee?.dob || '',
+    address: employee?.address || '',
+    phone: employee?.phone || user.phone || '',
+    employeeId: employee?._id?.toString(),
+  });
+});
+
+app.patch('/api/profile', authMiddleware, async (req, res) => {
+  const { name, dob, address, phone } = req.body || {};
+  const database = await getDb();
+  const updates = {};
+  if (name !== undefined) updates.name = name;
+  if (Object.keys(updates).length > 0) {
+    await database.collection('users').updateOne(
+      { _id: new ObjectId(req.user.id) },
+      { $set: updates }
+    );
+  }
+  const employee = await database.collection('employees').findOne({ userId: new ObjectId(req.user.id) });
+  if (employee) {
+    const empUpdates = {};
+    if (name !== undefined) empUpdates.name = name;
+    if (dob !== undefined) empUpdates.dob = dob;
+    if (address !== undefined) empUpdates.address = address;
+    if (phone !== undefined) empUpdates.phone = phone;
+    if (Object.keys(empUpdates).length > 0) {
+      await database.collection('employees').updateOne(
+        { _id: employee._id },
+        { $set: empUpdates }
+      );
+    }
+  }
   res.json({ updated: true });
 });
 
@@ -453,7 +505,8 @@ const buildDailyReport = async (database, dateParam) => {
   const perEmployee = {};
   punches.forEach((p) => {
     const minutes = minutesWorked(p);
-    const employee = employees.find((e) => e._id.toString() === p.employeeId) || {};
+    const employee = employees.find((e) => e._id?.toString() === p.employeeId)
+      || employees.find((e) => e.userId?.toString() === p.employeeId) || {};
     if (!perEmployee[p.employeeId]) {
       perEmployee[p.employeeId] = {
         employeeId: p.employeeId,
@@ -467,22 +520,20 @@ const buildDailyReport = async (database, dateParam) => {
   });
 
   const tipsTotal = tips.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const totalMinutesAll = Object.values(perEmployee).reduce((s, e) => s + e.minutesWorked, 0);
   const employeesArr = Object.values(perEmployee).map((emp) => {
     const hours = Math.round((emp.minutesWorked / 60) * 100) / 100;
     const wages = Math.round(hours * emp.hourlyRate * 100) / 100;
+    const tipShare = totalMinutesAll > 0 ? (emp.minutesWorked / totalMinutesAll) * tipsTotal : 0;
     return {
       name: emp.name,
       role: emp.role,
       hours,
       rate: emp.hourlyRate,
       wages,
-      tips: 0, // distributed below
+      tips: Math.round(tipShare * 100) / 100,
     };
   });
-
-  // Simple equal tip split
-  const splitTips = employeesArr.length ? tipsTotal / employeesArr.length : 0;
-  employeesArr.forEach((emp) => (emp.tips = Math.round(splitTips * 100) / 100));
 
   const totalWages = employeesArr.reduce((sum, e) => sum + e.wages, 0);
   return {

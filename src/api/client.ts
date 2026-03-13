@@ -77,6 +77,10 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string, token?: string) =>
     request('/api/auth/change-password', 'PATCH', { currentPassword, newPassword }, token),
 
+  getProfile: (token?: string) => request<{ name: string; email: string; dob?: string; address?: string; phone?: string; employeeId?: string }>('/api/profile', 'GET', undefined, token),
+  updateProfile: (data: { name?: string; dob?: string; address?: string; phone?: string }, token?: string) =>
+    request('/api/profile', 'PATCH', data, token),
+
   getEmployees: (token?: string) => request('/api/employees', 'GET', undefined, token),
   createEmployee: (data: any, token?: string) => request('/api/employees', 'POST', data, token),
   updateEmployee: (id: string, data: any, token?: string) =>
