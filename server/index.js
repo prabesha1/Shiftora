@@ -227,11 +227,17 @@ app.patch('/api/employees/:id', authMiddleware, async (req, res) => {
     .collection('employees')
     .updateOne({ _id: new ObjectId(req.params.id) }, { $set: updates });
   const emp = await database.collection('employees').findOne({ _id: new ObjectId(req.params.id) });
-  if (updates.name && emp?.userId) {
-    await database.collection('users').updateOne(
-      { _id: emp.userId },
-      { $set: { name: updates.name } }
-    ).catch(() => {});
+  if (emp?.userId) {
+    const userUpdates = {};
+    if (updates.name) userUpdates.name = updates.name;
+    if (updates.level === 'Manager') userUpdates.role = 'manager';
+    else if (updates.level === 'Employee') userUpdates.role = 'employee';
+    if (Object.keys(userUpdates).length > 0) {
+      await database.collection('users').updateOne(
+        { _id: emp.userId },
+        { $set: userUpdates }
+      ).catch(() => {});
+    }
   }
   res.json({ updated: true });
 });
@@ -687,6 +693,17 @@ app.get('/api/reports/employee/weekly', authMiddleware, async (req, res) => {
 async function seed(database) {
   const usersCol = database.collection('users');
   const employeesCol = database.collection('employees');
+
+  if (!(await usersCol.findOne({ email: 'admin@shiftora.test' }))) {
+    const pw = await bcrypt.hash('password123', 10);
+    await usersCol.insertOne({
+      name: 'Demo Admin',
+      email: 'admin@shiftora.test',
+      passwordHash: pw,
+      role: 'admin',
+    });
+    console.log('Seeded: admin@shiftora.test / password123');
+  }
 
   if (!(await usersCol.findOne({ email: 'manager@shiftora.test' }))) {
     const pw = await bcrypt.hash('password123', 10);

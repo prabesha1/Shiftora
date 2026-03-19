@@ -29,6 +29,7 @@ Shiftora is a full‑stack scheduling, time‑tracking, and labor reporting app 
 For a step‑by‑step Atlas vs. local walkthrough (and common pitfalls), see `docs/shiftora-detailed-setup.md`.
 
 ## Seeded demo accounts (created on first API start)
+- **Admin:** `admin@shiftora.test` / `password123`
 - **Manager:** `manager@shiftora.test` / `password123`
 - **Employee:** `employee@shiftora.test` / `password123`
 

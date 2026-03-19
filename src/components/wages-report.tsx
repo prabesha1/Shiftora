@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 
 type Props = {
   onNavigate: (page: string) => void;
-  user: { token: string };
+  user: { token: string; role?: string };
 };
 
 export function WagesReport({ onNavigate, user }: Props) {
@@ -131,7 +131,7 @@ export function WagesReport({ onNavigate, user }: Props) {
 
           <div className="hidden md:flex items-center gap-6">
             <button 
-              onClick={() => onNavigate('manager')}
+              onClick={() => onNavigate(user.role === 'admin' ? 'admin' : 'manager')}
               className="text-gray-600 hover:text-gray-900 transition-colors"
             >
               Dashboard
