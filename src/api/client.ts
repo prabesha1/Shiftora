@@ -1,4 +1,3 @@
-// In dev, use '' so Vite proxy forwards /api to backend. Otherwise use env or default.
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '' : 'http://localhost:4000');
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -22,6 +21,32 @@ export type Request = {
   status: 'pending' | 'approved' | 'declined';
   managerNote?: string;
   createdAt: string;
+};
+
+export type AuditEntry = {
+  _id: string;
+  actor: string;
+  action: string;
+  target: string;
+  details: string;
+  createdAt: string;
+};
+
+export type Notification = {
+  type: string;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  timestamp: string;
+};
+
+export type Settings = {
+  businessName: string;
+  businessHoursOpen: string;
+  businessHoursClose: string;
+  tipDistribution: string;
+  overtimeThreshold: number;
+  breakDurationMinutes: number;
+  payrollCycle: string;
 };
 
 const REQUEST_TIMEOUT_MS = 15000;
@@ -63,7 +88,7 @@ const request = async <T>(
       throw new Error('Request timed out. Is the server running at ' + API_BASE + '?');
     }
     if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
-      throw new Error('Cannot reach server. Start the API with: cd server && node index.js');
+      throw new Error('Cannot reach server. Start the API with: npm run server');
     }
     throw err;
   }
@@ -118,12 +143,21 @@ export const api = {
     return request(`/api/reports/employee/weekly?${params.toString()}`, 'GET', undefined, token);
   },
 
-  // Requests (swap/leave)
   getRequests: (status?: string, token?: string) =>
     request<Request[]>(`/api/requests${status ? `?status=${status}` : ''}`, 'GET', undefined, token),
   createRequest: (data: any, token?: string) => request<Request>('/api/requests', 'POST', data, token),
   updateRequest: (id: string, data: { status: string; managerNote?: string }, token?: string) =>
     request(`/api/requests/${id}`, 'PATCH', data, token),
+
+  getAuditLog: (limit = 50, token?: string) =>
+    request<AuditEntry[]>(`/api/audit-log?limit=${limit}`, 'GET', undefined, token),
+
+  getSettings: (token?: string) => request<Settings>('/api/settings', 'GET', undefined, token),
+  updateSettings: (data: Partial<Settings>, token?: string) =>
+    request('/api/settings', 'PATCH', data, token),
+
+  getNotifications: (token?: string) =>
+    request<Notification[]>('/api/notifications', 'GET', undefined, token),
 };
 
 export const loadStoredUser = (): User | null => {

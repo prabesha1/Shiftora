@@ -129,34 +129,54 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   }, [user.id, user.token, user.email]);
 
   const handlePunchIn = async () => {
-    await api.clockIn({ employeeId }, user.token);
-    setPunchStatus('punched-in');
-    setPunchInTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    setPunchGatePassed(true);
-    refreshData();
+    try {
+      await api.clockIn({ employeeId }, user.token);
+      setPunchStatus('punched-in');
+      setPunchInTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      setPunchGatePassed(true);
+      refreshData();
+    } catch (err: any) {
+      setProfileMessage(err.message || 'Failed to punch in.');
+      setTimeout(() => setProfileMessage(null), 3000);
+    }
   };
 
   const handlePunchOut = async () => {
-    await api.clockOut({ employeeId }, user.token);
-    setPunchStatus('not-punched-in');
-    setPunchInTime('');
-    setShowPunchOutModal(false);
-    refreshData();
+    try {
+      await api.clockOut({ employeeId }, user.token);
+      setPunchStatus('not-punched-in');
+      setPunchInTime('');
+      setShowPunchOutModal(false);
+      refreshData();
+    } catch (err: any) {
+      setProfileMessage(err.message || 'Failed to punch out.');
+      setTimeout(() => setProfileMessage(null), 3000);
+    }
   };
 
   const handleStartBreak = async () => {
-    await api.breakStart({ employeeId }, user.token);
-    setBreakStartTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    setPunchStatus('on-break');
-    setShowBreakModal(false);
-    refreshData();
+    try {
+      await api.breakStart({ employeeId }, user.token);
+      setBreakStartTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      setPunchStatus('on-break');
+      setShowBreakModal(false);
+      refreshData();
+    } catch (err: any) {
+      setProfileMessage(err.message || 'Failed to start break.');
+      setTimeout(() => setProfileMessage(null), 3000);
+    }
   };
 
   const handleEndBreak = async () => {
-    await api.breakEnd({ employeeId }, user.token);
-    setPunchStatus('punched-in');
-    setBreakStartTime('');
-    refreshData();
+    try {
+      await api.breakEnd({ employeeId }, user.token);
+      setPunchStatus('punched-in');
+      setBreakStartTime('');
+      refreshData();
+    } catch (err: any) {
+      setProfileMessage(err.message || 'Failed to end break.');
+      setTimeout(() => setProfileMessage(null), 3000);
+    }
   };
 
   const getCurrentShift = () => {
@@ -1061,7 +1081,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
           </DialogHeader>
           <div className="space-y-4 mt-4">
             {profileMessage && (
-              <div className={`p-3 rounded-lg text-sm ${profileMessage.startsWith('Updated') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+              <div className={`p-3 rounded-lg text-sm ${profileMessage.toLowerCase().includes('updated') || profileMessage.toLowerCase().includes('saved') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                 {profileMessage}
               </div>
             )}

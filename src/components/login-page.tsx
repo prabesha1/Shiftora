@@ -103,7 +103,6 @@ export function LoginPage({ onNavigate, onLoginSuccess, mode = 'login' }: Props)
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="admin">Admin</SelectItem>
                     <SelectItem value="manager">Manager</SelectItem>
                     <SelectItem value="employee">Employee</SelectItem>
                   </SelectContent>

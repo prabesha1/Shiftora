@@ -83,7 +83,7 @@ function AppContent() {
       {currentPage === 'signup' && <LoginPage mode="signup" onNavigate={setCurrentPage} onLoginSuccess={handleLoginSuccess} />}
       {currentPage === 'manager' && user && <ManagerDashboard onNavigate={setCurrentPage} onLogout={handleLogout} user={user} />}
       {currentPage === 'employee' && user && <EmployeeDashboard onNavigate={setCurrentPage} onLogout={handleLogout} user={user} />}
-      {currentPage === 'wages' && user && <WagesReport onNavigate={setCurrentPage} user={user} />}
+      {currentPage === 'wages' && user && <WagesReport onNavigate={setCurrentPage} onLogout={handleLogout} user={user} />}
       {currentPage === 'admin' && user && <AdminDashboard onNavigate={setCurrentPage} onLogout={handleLogout} user={user} />}
     </div>
   );

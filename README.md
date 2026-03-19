@@ -1,94 +1,201 @@
-# This is Capstone Project I & II for GBC
+# Shiftora — Restaurant Workforce Management
 
-Shiftora is a full‑stack scheduling, time‑tracking, and labor reporting app built with Vite + React on the front end and an Express + MongoDB API on the back end. It supports manager, admin, and employee roles, shift scheduling, clock‑in/out with breaks, tip tracking, and daily/weekly wage reports.
+Shiftora is a full-stack scheduling, time-tracking, and labor reporting app built with Vite + React on the front end and an Express + MongoDB API on the back end. It supports **admin**, **manager**, and **employee** roles, shift scheduling, clock-in/out with breaks, tip tracking, and daily/weekly wage reports.
+
+**Capstone Project I & II — George Brown College**
 
 ## Overview
-- **Front end:** Vite + React + TypeScript, Tailwind v4 build, shadcn/radix UI components.
-- **Back end:** Express REST API (`server/index.js`) using the MongoDB Node driver, JWT auth, bcrypt password hashing.
-- **Auth & roles:** register/login, persisted JWT, dashboards per role (manager, employee, admin).
-- **Core features:** employee CRUD, shift creation & deletion, live punch tracking (clock in/out & breaks), tip pool entry, daily and weekly labor/tips reporting.
+
+- **Front end:** Vite + React + TypeScript, Tailwind v4, shadcn/Radix UI components
+- **Back end:** Express 5 REST API (`server/index.js`) with MongoDB native driver, JWT auth, bcrypt password hashing
+- **Auth & roles:** Register/login with persisted JWT; role-based dashboards (admin, manager, employee)
+- **Security:** Role-based access control (RBAC) middleware on all sensitive endpoints; admin accounts can only be created via seed
+- **Core features:** Employee CRUD, shift scheduling, live punch tracking (clock in/out & breaks), tip pool entry, daily/weekly labor & tip reports
+
+## Features by Role
+
+### Admin Panel
+- Full dashboard with live employee status, financial analytics, and payroll summary
+- **Employee management** with search/filter, promote/demote, and bulk department reassignment
+- **Activity/Audit Log** tracking all system actions with timestamps
+- **Editable System Settings** (business hours, tip distribution, overtime threshold, payroll cycle)
+- **Employee attendance history** — click any employee to view their full punch record
+- **CSV export** of employee list
+- **Financial date range picker** for custom analytics
+- **Notification center** with overtime and long-break alerts
+- **Dark mode** toggle
+- Toast notifications with distinct colors for success, error, and info
+
+### Manager Dashboard
+- Bi-weekly schedule builder with drag-and-drop shift creation
+- Live employee status tracking (working, break, off)
+- Swap/leave request approval with manager notes
+- Time punch records with full break details
+- Tips pool management
+- Profile management and password change
+
+### Employee Dashboard
+- Punch in/out and break tracking with live clock display
+- Shift schedule view with upcoming shifts
+- Swap/leave request submission
+- Weekly wages and tips breakdown with payment history
+- Profile and password management
 
 ## Prerequisites
-- Node.js 20+ and npm (tested with npm that ships with Node 20).
-- MongoDB: local `mongod` or MongoDB Atlas cluster.
-- Two terminals (one for API, one for Vite dev server).
 
-## Quick Start (local or Atlas)
-1) Install deps (repo root): `npm install`  
-2) Copy env template: `cp server/.env.example server/.env`  
-3) Edit `server/.env` and set:
-   - `MONGO_URI=` `mongodb://127.0.0.1:27017/shiftora` **or** your Atlas URI  
-   - `JWT_SECRET=` strong random string  
-   - `PORT=4000` (default)
-4) Start MongoDB: run local `mongod` **or** ensure Atlas cluster is running and network access allows your IP.
-5) Start API (from repo root): `npm run server` → listens on `http://localhost:4000`.
-6) (Optional) Frontend API override: create `.env` in repo root with `VITE_API_BASE=http://localhost:4000` if you change the API host/port.
-7) Start frontend (new terminal, repo root): `npm run dev` → open the shown Vite URL (usually `http://localhost:5173`).
-8) Health check: `curl http://localhost:4000/api/health` should return `{"status":"ok"}`.
+- **Node.js 20+** and npm
+- **MongoDB:** local `mongod` or MongoDB Atlas cluster
+- Two terminals (one for API, one for Vite dev server)
 
-For a step‑by‑step Atlas vs. local walkthrough (and common pitfalls), see `docs/shiftora-detailed-setup.md`.
+## Quick Start
 
-## Seeded demo accounts (created on first API start)
-- **Admin:** `admin@shiftora.test` / `password123`
-- **Manager:** `manager@shiftora.test` / `password123`
-- **Employee:** `employee@shiftora.test` / `password123`
+### macOS / Linux
 
-## Available npm scripts
-- `npm run dev` – Vite dev server for the frontend.
-- `npm run build` – production build of the frontend.
-- `npm run server` – starts the Express API (`server/index.js`).
+```bash
+npm install
+cp server/.env.example server/.env
+# Edit server/.env — set MONGO_URI, JWT_SECRET, PORT
+npm run server    # Terminal 1 — starts API on http://localhost:4000
+npm run dev       # Terminal 2 — starts Vite on http://localhost:3000
+```
 
-## Environment variables
-- `server/.env`
-  - `MONGO_URI` – Mongo connection string (local or Atlas).
-  - `JWT_SECRET` – secret for signing JWTs.
-  - `PORT` – API port (default 4000).
-- `./.env` (frontend, optional)
-  - `VITE_API_BASE` – base URL for API requests; defaults to `http://localhost:4000`.
+### Windows (PowerShell)
 
-## API surface (server/index.js)
-- **Auth:** `POST /api/auth/register` (name, email, password, role), `POST /api/auth/login`.
-- **Employees:** `GET /api/employees`, `POST /api/employees`, `PATCH /api/employees/:id`, `DELETE /api/employees/:id` (auth required).
-- **Shifts:** `GET /api/shifts?employeeId=&start=&end=`, `POST /api/shifts`, `DELETE /api/shifts/:id`.
-- **Tips:** `GET /api/tips?date=YYYY-MM-DD`, `POST /api/tips`.
-- **Punches:** `GET /api/punches?employeeId=`, `POST /api /punches/clock-in`, `POST /api/punches/clock-out`, `POST /api/punches/break-start`, `POST /api/punches/break-end`.
-- **Reports:** `GET /api/reports/daily?date=YYYY-MM-DD`, `GET /api/reports/overview`.
-- **Health:** `GET /api/health`.
+```powershell
+npm install
+Copy-Item server\.env.example server\.env
+# Edit server\.env — set MONGO_URI, JWT_SECRET, PORT
+npm run server    # Terminal 1 — starts API on http://localhost:4000
+npm run dev       # Terminal 2 — starts Vite on http://localhost:3000
+```
 
-## Frontend entry points
-- `src/main.tsx` – React bootstrap.
-- `src/App.tsx` – route-like page switching for landing, login/signup, and dashboards.
-- Key UI: `src/components/manager-dashboard.tsx`, `employee-dashboard.tsx`, `admin-dashboard.tsx`, `wages-report.tsx`, `login-page.tsx`, `landing-page.tsx`.
-- API client: `src/api/client.ts` centralizes fetch calls and token storage.
+### Environment Setup
 
-## Data model (Mongo collections)
-- `users` – `{ name, email, passwordHash, role }`.
-- `employees` – mirrors user plus department/level/hourlyRate/status/joinDate; created alongside user registration.
-- `shifts` – `{ employee, employeeId, role, startTime, endTime, date, durationHours }`.
-- `punches` – `{ employeeId, employeeName, clockIn, clockOut, breaks[] }` with helper endpoints for breaks.
-- `tips` – `{ amount, date, notes, createdAt }`.
-- Reports aggregate the above (see `buildDailyReport` and `buildWeekly` in `server/index.js`).
+Edit `server/.env` and set:
+- `MONGO_URI=mongodb://127.0.0.1:27017/shiftora` (or your Atlas URI)
+- `JWT_SECRET=` a strong random string (e.g., generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
+- `PORT=4000` (default)
 
-## Typical workflows
-- **Register & login:** use UI “Get started” or `POST /api/auth/register` then `POST /api/auth/login`; store returned JWT.
-- **Manage employees:** manager/admin uses employee CRUD endpoints or UI modal to add/remove team members.
-- **Schedule shifts:** manager dashboard “Add shifts” or `POST /api/shifts`; delete with `DELETE /api/shifts/:id`.
-- **Track time:** employees clock in/out and breaks via `/api/punches/*`; manager dashboard shows live status.
-- **Record tips:** manager adds daily tip pool via `/api/tips`; reports split tips evenly across worked employees for the day.
-- **Reports:** `GET /api/reports/daily?date=` for a specific day; `GET /api/reports/overview` for today + trailing 7‑day summary.
+Health check: open `http://localhost:4000/api/health` — should return `{"status":"ok"}`.
+
+## Seeded Demo Accounts
+
+Created automatically on first API start:
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | `admin@shiftora.test` | `password123` |
+| Manager | `manager@shiftora.test` | `password123` |
+| Employee | `employee@shiftora.test` | `password123` |
+
+> **Note:** Admin accounts cannot be created via the signup form. Only the seeded admin or future admin-invite features can create admin users.
+
+## Available Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start Vite dev server (frontend) |
+| `npm run build` | Production build of the frontend |
+| `npm run server` | Start the Express API (`server/index.js`) |
+
+## Environment Variables
+
+### `server/.env`
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MONGO_URI` | MongoDB connection string | `mongodb://127.0.0.1:27017/shiftora` |
+| `JWT_SECRET` | Secret for signing JWTs | `dev-shiftora-secret` (insecure) |
+| `PORT` | API port | `4000` |
+
+### `.env` (frontend, optional)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VITE_API_BASE` | Base URL for API requests | Uses Vite proxy in dev |
+
+## API Surface
+
+### Auth
+- `POST /api/auth/register` — Create account (admin role restricted)
+- `POST /api/auth/login` — Login and receive JWT
+- `PATCH /api/auth/change-password` — Change password (auth required)
+
+### Employees (admin/manager only for mutations)
+- `GET /api/employees` — List all employees
+- `POST /api/employees` — Create employee with login account
+- `PATCH /api/employees/:id` — Update employee fields
+- `DELETE /api/employees/:id` — Remove employee and associated user account
+
+### Shifts (admin/manager only for mutations)
+- `GET /api/shifts?employeeId=&start=&end=` — List shifts
+- `POST /api/shifts` — Create shift
+- `DELETE /api/shifts/:id` — Delete shift
+
+### Tips (admin/manager only for creation)
+- `GET /api/tips?date=YYYY-MM-DD` — List tips
+- `POST /api/tips` — Add tip pool entry
+
+### Punches
+- `GET /api/punches?employeeId=` — List punch records
+- `POST /api/punches/clock-in` — Clock in
+- `POST /api/punches/clock-out` — Clock out
+- `POST /api/punches/break-start` — Start break
+- `POST /api/punches/break-end` — End break
+
+### Requests (admin/manager only for approval)
+- `GET /api/requests?status=` — List requests
+- `POST /api/requests` — Create swap/leave request
+- `PATCH /api/requests/:id` — Approve/decline request
+
+### Admin-Only Endpoints
+- `GET /api/audit-log?limit=` — View activity log
+- `GET /api/settings` — Read system settings
+- `PATCH /api/settings` — Update system settings
+- `GET /api/notifications` — Get system alerts (overtime, long breaks)
+
+### Reports
+- `GET /api/reports/daily?date=YYYY-MM-DD` — Daily report
+- `GET /api/reports/overview` — Today + weekly summary
+- `GET /api/reports/employee/weekly?employeeId=&periods=` — Employee weekly report
+
+### Health
+- `GET /api/health` — Database connection status
+
+## Data Model (MongoDB Collections)
+
+| Collection | Fields |
+|-----------|--------|
+| `users` | name, email, passwordHash, role, dob, address, phone |
+| `employees` | userId, name, email, role, department, level, hourlyRate, status, joinDate |
+| `shifts` | employee, employeeId, role, startTime, endTime, date, durationHours |
+| `punches` | employeeId, employeeName, clockIn, clockOut, breaks[] |
+| `tips` | amount, date, notes, createdAt |
+| `requests` | employee, employeeId, shift, role, reason, type, status, managerNote |
+| `audit_log` | actor, action, target, details, createdAt |
+| `settings` | key, value, updatedAt |
+
+Database indexes are automatically created on startup for optimal query performance.
+
+## Cross-Platform Compatibility
+
+This project works on both **macOS** and **Windows**:
+- All npm scripts use cross-platform commands (`vite`, `node`)
+- File paths use `path.resolve()` and `path.join()`
+- `.gitattributes` normalizes line endings (LF) across platforms
+- No shell-specific scripts or OS-dependent commands in the codebase
 
 ## Troubleshooting
-- **Login stuck or "Cannot reach server":** Start the API first: `npm run server` (in one terminal), then `npm run dev` (in another). The frontend needs the API at `http://localhost:4000`.
-- **Cannot connect to Mongo:** verify `MONGO_URI`, that `mongod` is running (local) or Atlas IP access rules include your IP; check logs when running `npm run server`.
-- **401 Invalid token:** ensure you include `Authorization: Bearer <token>` in protected calls; re-login if token expired.
-- **CORS errors from frontend:** confirm `VITE_API_BASE` points to the running API origin and restart `npm run dev` after env changes.
-- **Port in use:** change `PORT` in `server/.env` and update `VITE_API_BASE` to match.
 
-## Additional docs
-- `docs/shiftora-detailed-setup.md` – deeper setup steps (Atlas vs. local), sample cURL calls, and guidance on wiring remaining hard‑coded lists to live collections.
+- **"Cannot reach server":** Start the API first (`npm run server`), then the frontend (`npm run dev`)
+- **Cannot connect to MongoDB:** Verify `MONGO_URI` is correct and `mongod` is running (local) or Atlas IP access includes your IP
+- **401 Invalid token:** Re-login; tokens expire after 12 hours
+- **CORS errors:** Confirm `VITE_API_BASE` points to the running API and restart `npm run dev` after env changes
+- **Port in use:** Change `PORT` in `server/.env` and update proxy in `vite.config.ts`
 
-## Notes
-- This is a student capstone; no license file is present. Add one if you plan to distribute. 
+## Additional Docs
 
-Prabesh Shrestha
-moksh Chhetri
+- `docs/shiftora-detailed-setup.md` — Detailed setup guide for Atlas vs. local MongoDB
+
+## Authors
+
+- Prabesh Shrestha
+- Moksh Chhetri

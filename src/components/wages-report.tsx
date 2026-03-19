@@ -18,10 +18,11 @@ import { useEffect, useState } from 'react';
 
 type Props = {
   onNavigate: (page: string) => void;
+  onLogout: () => void;
   user: { token: string; role?: string };
 };
 
-export function WagesReport({ onNavigate, user }: Props) {
+export function WagesReport({ onNavigate, onLogout, user }: Props) {
   const [selectedDate, setSelectedDate] = useState(toISODate(new Date()));
   const reportDateISO = selectedDate;
   const reportDate = new Date(selectedDate + 'T00:00:00');
@@ -145,7 +146,7 @@ export function WagesReport({ onNavigate, user }: Props) {
             </div>
             <Button 
               variant="ghost" 
-              onClick={() => onNavigate('landing')}
+              onClick={onLogout}
               className="hidden sm:inline-flex"
             >
               Log out

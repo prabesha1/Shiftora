@@ -186,13 +186,14 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     setShowDayScheduleModal(true);
   };
 
-  const handleRemoveEmployee = (employeeId: string, employeeName: string) => {
-    api.deleteEmployee(employeeId, user.token)
-      .then(() => {
-        setEmployees(employees.filter(emp => emp._id !== employeeId));
-        setConfirmationMessage(`${employeeName} has been removed from the team.`);
-      })
-      .catch((err) => setConfirmationMessage(err.message));
+  const handleRemoveEmployee = async (employeeId: string, employeeName: string) => {
+    try {
+      await api.deleteEmployee(employeeId, user.token);
+      setEmployees(employees.filter(emp => emp._id !== employeeId));
+      setConfirmationMessage(`${employeeName} has been removed from the team.`);
+    } catch (err: any) {
+      setConfirmationMessage(err.message || 'Failed to remove employee.');
+    }
     setTimeout(() => setConfirmationMessage(null), 3000);
   };
 
@@ -465,7 +466,10 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                         await api.breakStart({ employeeId: managerEmployee?._id || user.id }, user.token);
                         const p = await api.getPunches({}, user.token);
                         setPunches(p as Punch[]);
-                      } catch {}
+                      } catch (e: any) {
+                        setConfirmationMessage(e.message || 'Failed to start break');
+                        setTimeout(() => setConfirmationMessage(null), 3000);
+                      }
                     }}
                   >
                     <Coffee className="w-5 h-5" />
@@ -481,7 +485,10 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                         await api.clockOut({ employeeId: managerEmployee?._id || user.id }, user.token);
                         const p = await api.getPunches({}, user.token);
                         setPunches(p as Punch[]);
-                      } catch {}
+                      } catch (e: any) {
+                        setConfirmationMessage(e.message || 'Failed to punch out');
+                        setTimeout(() => setConfirmationMessage(null), 3000);
+                      }
                     }}
                   >
                     <LogOut className="w-5 h-5" />
@@ -500,7 +507,10 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                       await api.breakEnd({ employeeId: managerEmployee?._id || user.id }, user.token);
                       const p = await api.getPunches({}, user.token);
                       setPunches(p as Punch[]);
-                    } catch {}
+                    } catch (e: any) {
+                      setConfirmationMessage(e.message || 'Failed to end break');
+                      setTimeout(() => setConfirmationMessage(null), 3000);
+                    }
                   }}
                 >
                   <Coffee className="w-5 h-5" />
@@ -987,16 +997,19 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       </main>
 
       {/* Confirmation Toast */}
-      {confirmationMessage && (
-        <div className="fixed bottom-8 right-8 bg-[#22C55E] text-white px-6 py-4 rounded-2xl shadow-xl shadow-green-200/50 flex items-center gap-3 animate-in slide-in-from-bottom-5 z-50">
-          <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
+      {confirmationMessage && (() => {
+        const isError = confirmationMessage.toLowerCase().includes('fail') || confirmationMessage.toLowerCase().includes('error') || confirmationMessage.toLowerCase().includes('invalid') || confirmationMessage.toLowerCase().includes('missing') || confirmationMessage.toLowerCase().includes('required');
+        return (
+          <div className={`fixed bottom-8 right-8 text-white px-6 py-4 rounded-2xl shadow-xl flex items-center gap-3 animate-in slide-in-from-bottom-5 z-50`} style={{ backgroundColor: isError ? '#ef4444' : '#22C55E' }}>
+            <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isError ? 'M6 18L18 6M6 6l12 12' : 'M5 13l4 4L19 7'} />
+              </svg>
+            </div>
+            <span>{confirmationMessage}</span>
           </div>
-          <span>{confirmationMessage}</span>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Shifts Today Modal */}
       <Dialog open={showShiftsModal} onOpenChange={setShowShiftsModal}>
@@ -1554,7 +1567,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           </DialogHeader>
           <div className="space-y-6 mt-4">
             {managerProfileMessage && (
-              <div className={`p-3 rounded-lg text-sm ${managerProfileMessage.startsWith('Updated') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+              <div className={`p-3 rounded-lg text-sm ${managerProfileMessage.toLowerCase().includes('updated') || managerProfileMessage.toLowerCase().includes('saved') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                 {managerProfileMessage}
               </div>
             )}

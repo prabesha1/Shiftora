@@ -30,8 +30,8 @@ const MINUTES_IN_DAY = 24 * 60;
 
 const startOfWeekMonday = (date) => {
   const d = new Date(date);
-  const day = d.getDay(); // 0 (Sun) - 6 (Sat)
-  const diff = (day + 6) % 7; // days since Monday
+  const day = d.getDay();
+  const diff = (day + 6) % 7;
   d.setDate(d.getDate() - diff);
   d.setHours(0, 0, 0, 0);
   return d;
@@ -60,6 +60,9 @@ async function getDb() {
   await client.connect();
   db = client.db();
   console.log('Connected to MongoDB');
+
+  await ensureIndexes(db);
+
   if (!seeded) {
     await seed(db);
     seeded = true;
@@ -67,10 +70,30 @@ async function getDb() {
   return db;
 }
 
+async function ensureIndexes(database) {
+  try {
+    await database.collection('users').createIndex({ email: 1 }, { unique: true });
+    await database.collection('employees').createIndex({ email: 1 });
+    await database.collection('employees').createIndex({ userId: 1 });
+    await database.collection('punches').createIndex({ employeeId: 1 });
+    await database.collection('punches').createIndex({ clockIn: -1 });
+    await database.collection('shifts').createIndex({ date: 1 });
+    await database.collection('shifts').createIndex({ employeeId: 1 });
+    await database.collection('tips').createIndex({ date: 1 });
+    await database.collection('requests').createIndex({ status: 1 });
+    await database.collection('audit_log').createIndex({ createdAt: -1 });
+    await database.collection('settings').createIndex({ key: 1 }, { unique: true });
+  } catch {
+    // indexes may already exist
+  }
+}
+
 const signToken = (user) =>
   jwt.sign({ id: user._id.toString(), role: user.role, name: user.name }, JWT_SECRET, {
     expiresIn: '12h',
   });
+
+// ── Middleware ──────────────────────────────────────────────
 
 const authMiddleware = async (req, res, next) => {
   const auth = req.headers.authorization;
@@ -84,6 +107,30 @@ const authMiddleware = async (req, res, next) => {
     res.status(401).json({ message: 'Invalid token' });
   }
 };
+
+const requireRole = (...roles) => (req, res, next) => {
+  if (!req.user || !roles.includes(req.user.role)) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  next();
+};
+
+// Helper: write to audit log
+async function logAction(database, { actor, action, target, details }) {
+  try {
+    await database.collection('audit_log').insertOne({
+      actor: actor || 'system',
+      action,
+      target: target || '',
+      details: details || '',
+      createdAt: new Date(),
+    });
+  } catch {
+    // non-critical — don't crash if logging fails
+  }
+}
+
+// ── Health ──────────────────────────────────────────────────
 
 app.get('/api/health', async (_req, res) => {
   try {
@@ -100,39 +147,39 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-// AUTH
+// ── AUTH ────────────────────────────────────────────────────
+
 app.post('/api/auth/register', async (req, res) => {
   const { name, email, password, role = 'employee', hourlyRate = 16 } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ message: 'Missing fields' });
   if (password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters' });
+
+  const safeRole = (role === 'manager' || role === 'employee') ? role : 'employee';
+
   const database = await getDb();
   const existing = await database.collection('users').findOne({ email });
   if (existing) return res.status(400).json({ message: 'Email already registered' });
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const userDoc = { name, email, passwordHash, role };
+  const userDoc = { name, email, passwordHash, role: safeRole };
   const userResult = await database.collection('users').insertOne(userDoc);
 
   await database.collection('employees').insertOne({
     userId: userResult.insertedId,
     name,
     email,
-    role,
+    role: safeRole,
     department: 'Front of House',
-    level: role === 'manager' ? 'Manager' : 'Employee',
+    level: safeRole === 'manager' ? 'Manager' : 'Employee',
     hourlyRate,
     status: 'active',
     joinDate: new Date().toISOString(),
   });
 
+  await logAction(database, { actor: name, action: 'register', target: email, details: `New ${safeRole} account created` });
+
   const token = signToken({ ...userDoc, _id: userResult.insertedId });
-  res.json({
-    id: userResult.insertedId.toString(),
-    name,
-    email,
-    role,
-    token,
-  });
+  res.json({ id: userResult.insertedId.toString(), name, email, role: safeRole, token });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -170,14 +217,15 @@ app.patch('/api/auth/change-password', authMiddleware, async (req, res) => {
   res.json({ message: 'Password updated successfully' });
 });
 
-// EMPLOYEES CRUD
+// ── EMPLOYEES CRUD ─────────────────────────────────────────
+
 app.get('/api/employees', authMiddleware, async (_req, res) => {
   const database = await getDb();
   const employees = await database.collection('employees').find().toArray();
   res.json(employees);
 });
 
-app.post('/api/employees', authMiddleware, async (req, res) => {
+app.post('/api/employees', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const { name, email, password, role, department, level, hourlyRate } = req.body || {};
   if (!name || !email) return res.status(400).json({ message: 'Name and email required' });
   const database = await getDb();
@@ -210,10 +258,13 @@ app.post('/api/employees', authMiddleware, async (req, res) => {
     joinDate: new Date().toISOString(),
   };
   const result = await database.collection('employees').insertOne(employeeDoc);
+
+  await logAction(database, { actor: req.user.name, action: 'create_employee', target: name, details: `Added ${role || 'Server'} in ${department || 'Front of House'}` });
+
   res.status(201).json({ _id: result.insertedId, ...employeeDoc });
 });
 
-app.patch('/api/employees/:id', authMiddleware, async (req, res) => {
+app.patch('/api/employees/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const allowedFields = ['name', 'email', 'role', 'department', 'level', 'hourlyRate', 'status', 'phone', 'dob', 'address'];
   const updates = {};
   for (const key of allowedFields) {
@@ -233,14 +284,23 @@ app.patch('/api/employees/:id', authMiddleware, async (req, res) => {
     if (updates.level === 'Manager') userUpdates.role = 'manager';
     else if (updates.level === 'Employee') userUpdates.role = 'employee';
     if (Object.keys(userUpdates).length > 0) {
-      await database.collection('users').updateOne(
-        { _id: emp.userId },
-        { $set: userUpdates }
-      ).catch(() => {});
+      try {
+        await database.collection('users').updateOne(
+          { _id: emp.userId },
+          { $set: userUpdates }
+        );
+      } catch (err) {
+        console.error('Failed to sync user record:', err.message);
+      }
     }
   }
+
+  await logAction(database, { actor: req.user.name, action: 'update_employee', target: emp?.name || req.params.id, details: `Updated fields: ${Object.keys(updates).join(', ')}` });
+
   res.json({ updated: true });
 });
+
+// ── PROFILE ────────────────────────────────────────────────
 
 app.get('/api/profile', authMiddleware, async (req, res) => {
   const database = await getDb();
@@ -252,8 +312,8 @@ app.get('/api/profile', authMiddleware, async (req, res) => {
     name: user.name,
     email: user.email,
     role: user.role,
-    dob: employee?.dob || '',
-    address: employee?.address || '',
+    dob: employee?.dob || user.dob || '',
+    address: employee?.address || user.address || '',
     phone: employee?.phone || user.phone || '',
     employeeId: employee?._id?.toString(),
   });
@@ -262,14 +322,20 @@ app.get('/api/profile', authMiddleware, async (req, res) => {
 app.patch('/api/profile', authMiddleware, async (req, res) => {
   const { name, dob, address, phone } = req.body || {};
   const database = await getDb();
-  const updates = {};
-  if (name !== undefined) updates.name = name;
-  if (Object.keys(updates).length > 0) {
+
+  const userUpdates = {};
+  if (name !== undefined) userUpdates.name = name;
+  if (dob !== undefined) userUpdates.dob = dob;
+  if (address !== undefined) userUpdates.address = address;
+  if (phone !== undefined) userUpdates.phone = phone;
+
+  if (Object.keys(userUpdates).length > 0) {
     await database.collection('users').updateOne(
       { _id: new ObjectId(req.user.id) },
-      { $set: updates }
+      { $set: userUpdates }
     );
   }
+
   const employee = await database.collection('employees').findOne({ userId: new ObjectId(req.user.id) });
   if (employee) {
     const empUpdates = {};
@@ -287,13 +353,25 @@ app.patch('/api/profile', authMiddleware, async (req, res) => {
   res.json({ updated: true });
 });
 
-app.delete('/api/employees/:id', authMiddleware, async (req, res) => {
+// ── DELETE EMPLOYEE (with user cleanup) ────────────────────
+
+app.delete('/api/employees/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const database = await getDb();
+  const emp = await database.collection('employees').findOne({ _id: new ObjectId(req.params.id) });
+  if (!emp) return res.status(404).json({ message: 'Employee not found' });
+
+  if (emp.userId) {
+    await database.collection('users').deleteOne({ _id: emp.userId });
+  }
   await database.collection('employees').deleteOne({ _id: new ObjectId(req.params.id) });
+
+  await logAction(database, { actor: req.user.name, action: 'delete_employee', target: emp.name || req.params.id, details: 'Employee and user account removed' });
+
   res.json({ deleted: true });
 });
 
-// SHIFTS
+// ── SHIFTS ─────────────────────────────────────────────────
+
 app.get('/api/shifts', authMiddleware, async (req, res) => {
   const database = await getDb();
   const { employeeId, start, end } = req.query;
@@ -308,7 +386,7 @@ app.get('/api/shifts', authMiddleware, async (req, res) => {
   res.json(shifts);
 });
 
-app.post('/api/shifts', authMiddleware, async (req, res) => {
+app.post('/api/shifts', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const database = await getDb();
   const { employee, role, startTime, endTime, date, employeeId } = req.body || {};
   const durationHours = calculateDurationHours(startTime, endTime);
@@ -329,14 +407,15 @@ app.post('/api/shifts', authMiddleware, async (req, res) => {
   res.status(201).json({ _id: result.insertedId, ...doc });
 });
 
-app.delete('/api/shifts/:id', authMiddleware, async (req, res) => {
+app.delete('/api/shifts/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const database = await getDb();
   const result = await database.collection('shifts').deleteOne({ _id: new ObjectId(req.params.id) });
   if (!result.deletedCount) return res.status(404).json({ message: 'Shift not found' });
   res.json({ deleted: true });
 });
 
-// TIPS
+// ── TIPS ───────────────────────────────────────────────────
+
 app.get('/api/tips', authMiddleware, async (req, res) => {
   const database = await getDb();
   const { date } = req.query;
@@ -345,16 +424,20 @@ app.get('/api/tips', authMiddleware, async (req, res) => {
   res.json(tips);
 });
 
-app.post('/api/tips', authMiddleware, async (req, res) => {
+app.post('/api/tips', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const { amount, date, notes } = req.body || {};
   if (!amount || !date) return res.status(400).json({ message: 'Amount and date required' });
   const database = await getDb();
   const doc = { amount: Number(amount), date, notes, createdAt: new Date() };
   const result = await database.collection('tips').insertOne(doc);
+
+  await logAction(database, { actor: req.user.name, action: 'add_tip', target: date, details: `$${Number(amount).toFixed(2)} added to tip pool` });
+
   res.status(201).json({ _id: result.insertedId, ...doc });
 });
 
-// PUNCHES
+// ── PUNCHES ────────────────────────────────────────────────
+
 const findLatestPunch = async (database, employeeId) =>
   database.collection('punches').findOne({ employeeId, clockOut: null }, { sort: { clockIn: -1 } });
 
@@ -423,7 +506,8 @@ app.post('/api/punches/break-end', authMiddleware, async (req, res) => {
   res.json({ updated: true });
 });
 
-// REQUESTS (swap/leave) - basic CRUD to support manager review
+// ── REQUESTS (swap/leave) ──────────────────────────────────
+
 app.get('/api/requests', authMiddleware, async (req, res) => {
   const database = await getDb();
   const filter = {};
@@ -457,7 +541,7 @@ app.post('/api/requests', authMiddleware, async (req, res) => {
   res.status(201).json({ _id: result.insertedId, ...doc });
 });
 
-app.patch('/api/requests/:id', authMiddleware, async (req, res) => {
+app.patch('/api/requests/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const { status, managerNote } = req.body || {};
   if (!['approved', 'declined', 'pending'].includes(status)) {
     return res.status(400).json({ message: 'Invalid status' });
@@ -469,13 +553,125 @@ app.patch('/api/requests/:id', authMiddleware, async (req, res) => {
     await database
       .collection('requests')
       .updateOne({ _id: new ObjectId(req.params.id) }, { $set: update });
+
+    await logAction(database, { actor: req.user.name, action: `request_${status}`, target: req.params.id, details: managerNote || '' });
+
     res.json({ updated: true });
   } catch (err) {
     res.status(400).json({ message: 'Invalid request id' });
   }
 });
 
-// REPORTS
+// ── AUDIT LOG ──────────────────────────────────────────────
+
+app.get('/api/audit-log', authMiddleware, requireRole('admin'), async (req, res) => {
+  const database = await getDb();
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const logs = await database
+    .collection('audit_log')
+    .find()
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray();
+  res.json(logs);
+});
+
+// ── SETTINGS ───────────────────────────────────────────────
+
+const DEFAULT_SETTINGS = {
+  businessName: 'Shiftora Restaurant',
+  businessHoursOpen: '09:00',
+  businessHoursClose: '23:00',
+  tipDistribution: 'proportional',
+  overtimeThreshold: 40,
+  breakDurationMinutes: 30,
+  payrollCycle: 'biweekly',
+};
+
+app.get('/api/settings', authMiddleware, async (_req, res) => {
+  const database = await getDb();
+  const rows = await database.collection('settings').find().toArray();
+  const merged = { ...DEFAULT_SETTINGS };
+  for (const row of rows) {
+    merged[row.key] = row.value;
+  }
+  res.json(merged);
+});
+
+app.patch('/api/settings', authMiddleware, requireRole('admin'), async (req, res) => {
+  const database = await getDb();
+  const allowed = Object.keys(DEFAULT_SETTINGS);
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    await database.collection('settings').updateOne(
+      { key },
+      { $set: { key, value, updatedAt: new Date() } },
+      { upsert: true }
+    );
+  }
+
+  await logAction(database, { actor: req.user.name, action: 'update_settings', target: 'system', details: `Updated: ${Object.keys(updates).join(', ')}` });
+
+  res.json({ updated: true });
+});
+
+// ── NOTIFICATIONS ──────────────────────────────────────────
+
+app.get('/api/notifications', authMiddleware, async (req, res) => {
+  const database = await getDb();
+  const punches = await database.collection('punches').find({ clockOut: null }).toArray();
+  const employees = await database.collection('employees').find().toArray();
+  const requests = await database.collection('requests').find({ status: 'pending' }).toArray();
+
+  const notifications = [];
+
+  // Overtime alerts (employees with >8hrs active today)
+  for (const p of punches) {
+    const hoursActive = (Date.now() - new Date(p.clockIn).getTime()) / 3600000;
+    if (hoursActive > 8) {
+      notifications.push({
+        type: 'overtime',
+        severity: 'warning',
+        message: `${p.employeeName} has been clocked in for ${Math.floor(hoursActive)}h — possible overtime`,
+        timestamp: p.clockIn,
+      });
+    }
+  }
+
+  // Active break too long (>45 min)
+  for (const p of punches) {
+    const lastBreak = p.breaks?.[p.breaks.length - 1];
+    if (lastBreak && !lastBreak.end) {
+      const breakMinutes = (Date.now() - new Date(lastBreak.start).getTime()) / 60000;
+      if (breakMinutes > 45) {
+        notifications.push({
+          type: 'long_break',
+          severity: 'info',
+          message: `${p.employeeName} has been on break for ${Math.floor(breakMinutes)} minutes`,
+          timestamp: lastBreak.start,
+        });
+      }
+    }
+  }
+
+  // Pending requests
+  if (requests.length > 0) {
+    notifications.push({
+      type: 'pending_requests',
+      severity: 'info',
+      message: `${requests.length} pending swap/leave request${requests.length > 1 ? 's' : ''} to review`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  res.json(notifications);
+});
+
+// ── REPORTS ────────────────────────────────────────────────
+
 const minutesWorked = (punch) => {
   if (!punch.clockIn) return 0;
   const end = punch.clockOut ? new Date(punch.clockOut) : new Date();
@@ -586,7 +782,6 @@ async function buildWeekly(database, today) {
   };
 }
 
-// Employee-focused weekly report with wages, tips, hours
 app.get('/api/reports/employee/weekly', authMiddleware, async (req, res) => {
   const { employeeId, periods = 1, reference } = req.query || {};
   if (!employeeId) return res.status(400).json({ message: 'employeeId required' });
@@ -689,7 +884,8 @@ app.get('/api/reports/employee/weekly', authMiddleware, async (req, res) => {
   res.json({ weeks });
 });
 
-// Seed with demo accounts for quick use
+// ── SEED ───────────────────────────────────────────────────
+
 async function seed(database) {
   const usersCol = database.collection('users');
   const employeesCol = database.collection('employees');
@@ -702,7 +898,7 @@ async function seed(database) {
       passwordHash: pw,
       role: 'admin',
     });
-    console.log('Seeded: admin@shiftora.test / password123');
+    console.log('Seeded demo admin account');
   }
 
   if (!(await usersCol.findOne({ email: 'manager@shiftora.test' }))) {
@@ -724,7 +920,7 @@ async function seed(database) {
       status: 'active',
       joinDate: new Date().toISOString(),
     });
-    console.log('Seeded: manager@shiftora.test / password123');
+    console.log('Seeded demo manager account');
   }
 
   if (!(await usersCol.findOne({ email: 'employee@shiftora.test' }))) {
@@ -746,9 +942,20 @@ async function seed(database) {
       status: 'active',
       joinDate: new Date().toISOString(),
     });
-    console.log('Seeded: employee@shiftora.test / password123');
+    console.log('Seeded demo employee account');
+  }
+
+  // Seed default settings
+  const settingsCol = database.collection('settings');
+  for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+    const existing = await settingsCol.findOne({ key });
+    if (!existing) {
+      await settingsCol.insertOne({ key, value, updatedAt: new Date() });
+    }
   }
 }
+
+// ── START ──────────────────────────────────────────────────
 
 async function start() {
   try {
