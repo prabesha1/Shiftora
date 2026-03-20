@@ -1,14 +1,14 @@
-import { Calendar, Users, RefreshCw, Plus, FileText, ChevronRight, Loader2 } from 'lucide-react';
+import { Calendar, Users, RefreshCw, Plus, FileText, ChevronRight, Loader2, Download, Pencil, Printer } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
 import { ScheduleBuilder } from './schedule-builder';
 import { DateTimePanel } from './datetime-panel';
-import { Clock, Mail, Phone, MapPin, Building2, Shield, Settings, Bell, Trash2, LogIn, LogOut, Coffee } from 'lucide-react';
+import { Clock, Mail, Phone, MapPin, Building2, Shield, Settings, Bell, Trash2, LogIn, LogOut, Coffee, CheckCheck, X } from 'lucide-react';
 import { addDays, calculateShiftDurationHours, formatHours, formatLongDate, formatMonthDay, startOfWeek, toISODate } from '../utils/time';
 import { api } from '../api/client';
 import { useEffect } from 'react';
@@ -104,6 +104,17 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   const [managerPasswordForm, setManagerPasswordForm] = useState({ current: '', new: '', confirm: '' });
   const [managerProfileMessage, setManagerProfileMessage] = useState<string | null>(null);
   const [showAllPunchesModal, setShowAllPunchesModal] = useState(false);
+  const [showEditPunchModal, setShowEditPunchModal] = useState(false);
+  const [editingPunch, setEditingPunch] = useState<Punch | null>(null);
+  const [editPunchForm, setEditPunchForm] = useState({ clockIn: '', clockOut: '' });
+  const [editPunchSaving, setEditPunchSaving] = useState(false);
+
+  const [userNotifications, setUserNotifications] = useState<any[]>([]);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  const [publishLoading, setPublishLoading] = useState(false);
+
   const onHolidayEmployees: Employee[] = [];
   
   // Create shift form state
@@ -173,12 +184,6 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       .catch((err) => setConfirmationMessage(err.message));
     setNewShift({ employee: '', role: '', startTime: '', endTime: '', date: '' });
     setShowCreateShiftModal(false);
-  };
-
-  const handlePublishSchedule = () => {
-    setConfirmationMessage('Schedule published successfully!');
-    setTimeout(() => setConfirmationMessage(null), 3000);
-    setShowPublishModal(false);
   };
 
   const handleDaySchedule = (day: string, date: string, weekLabel: string) => {
@@ -262,6 +267,124 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
   const week1StartIso = toISODate(week1Start);
   const week2EndIso = toISODate(week2End);
 
+  const handleEditPunch = (punch: Punch) => {
+    setEditingPunch(punch);
+    const inDate = new Date(punch.clockIn);
+    const formatLocalDatetime = (d: Date) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const h = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      return `${y}-${m}-${day}T${h}:${min}`;
+    };
+    setEditPunchForm({
+      clockIn: formatLocalDatetime(inDate),
+      clockOut: punch.clockOut ? formatLocalDatetime(new Date(punch.clockOut)) : '',
+    });
+    setShowEditPunchModal(true);
+  };
+
+  const handleSaveEditPunch = async () => {
+    if (!editingPunch) return;
+    setEditPunchSaving(true);
+    try {
+      const data: any = {};
+      if (editPunchForm.clockIn) data.clockIn = new Date(editPunchForm.clockIn).toISOString();
+      if (editPunchForm.clockOut) data.clockOut = new Date(editPunchForm.clockOut).toISOString();
+      else data.clockOut = null;
+      await api.updatePunch(editingPunch._id, data, user.token);
+      const p = await api.getPunches({}, user.token);
+      setPunches(p as Punch[]);
+      setShowEditPunchModal(false);
+      setEditingPunch(null);
+      setConfirmationMessage('Punch record updated.');
+    } catch (e: any) {
+      setConfirmationMessage(e.message || 'Failed to update punch');
+    } finally {
+      setEditPunchSaving(false);
+      setTimeout(() => setConfirmationMessage(null), 3000);
+    }
+  };
+
+  const handlePublishScheduleReal = async () => {
+    setPublishLoading(true);
+    try {
+      const result = await api.publishSchedule({ start: week1StartIso, end: week2EndIso }, user.token);
+      setConfirmationMessage(`Schedule published! ${result.count} shifts notified to employees.`);
+      setShowPublishModal(false);
+    } catch (e: any) {
+      setConfirmationMessage(e.message || 'Failed to publish schedule');
+    } finally {
+      setPublishLoading(false);
+      setTimeout(() => setConfirmationMessage(null), 5000);
+    }
+  };
+
+  const handlePrintSchedule = () => {
+    const printShifts = shifts.filter(s => {
+      const d = (s.date || '').split('T')[0];
+      return d >= week1StartIso && d <= week2EndIso;
+    });
+    const grouped: Record<string, Shift[]> = {};
+    printShifts.forEach(s => {
+      const d = (s.date || '').split('T')[0];
+      if (!grouped[d]) grouped[d] = [];
+      grouped[d].push(s);
+    });
+    const sortedDates = Object.keys(grouped).sort();
+    const rows = sortedDates.map(date => {
+      const dayShifts = grouped[date];
+      return `<tr><td colspan="4" style="background:#f0f4ff;font-weight:600;padding:8px 12px;border:1px solid #ddd">${new Date(date + 'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}</td></tr>` +
+        dayShifts.map(s => `<tr><td style="padding:6px 12px;border:1px solid #eee">${s.employee}</td><td style="padding:6px 12px;border:1px solid #eee">${s.role}</td><td style="padding:6px 12px;border:1px solid #eee">${s.startTime} – ${s.endTime}</td><td style="padding:6px 12px;border:1px solid #eee">${formatHours(calculateShiftDurationHours(s.startTime, s.endTime))}h</td></tr>`).join('');
+    }).join('');
+    const html = `<html><head><title>Shiftora Schedule</title><style>body{font-family:system-ui,sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th{background:#2563eb;color:#fff;padding:10px 12px;text-align:left}h1{color:#2563eb;margin-bottom:4px}p{color:#666;margin-top:0}</style></head><body><h1>Shiftora Schedule</h1><p>${formatMonthDay(biWeeklyStart)} – ${formatMonthDay(biWeeklyEnd)}</p><table><thead><tr><th>Employee</th><th>Role</th><th>Time</th><th>Duration</th></tr></thead><tbody>${rows}</tbody></table><p style="margin-top:20px;color:#999;font-size:12px">Printed on ${new Date().toLocaleString()}</p></body></html>`;
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => printWindow.print(), 400);
+    }
+  };
+
+  const loadNotifications = useCallback(async () => {
+    try {
+      const notifs = await api.getUserNotifications(user.token);
+      setUserNotifications(notifs);
+    } catch {}
+  }, [user.token]);
+
+  const handleMarkAllRead = async () => {
+    try {
+      await api.markAllNotificationsRead(user.token);
+      setUserNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    } catch {}
+  };
+
+  const handleExportPunchesCSV = () => {
+    const sorted = [...punches].sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime());
+    const header = 'Employee,Punch In,Punch Out,Duration (min),Breaks\n';
+    const rows = sorted.map(p => {
+      const pIn = new Date(p.clockIn);
+      const pOut = p.clockOut ? new Date(p.clockOut) : null;
+      const dur = pOut ? Math.round((pOut.getTime() - pIn.getTime()) / 60000) : '';
+      const breaks = (p.breaks || []).map((b: any) => {
+        const s = new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const e = b.end ? new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'active';
+        return `${s}-${e}`;
+      }).join('; ');
+      return `"${p.employeeName}","${pIn.toLocaleString()}","${pOut ? pOut.toLocaleString() : '—'}","${dur}","${breaks}"`;
+    }).join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `shiftora-punches-${todayIso}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    setConfirmationMessage('Punch records exported as CSV.');
+    setTimeout(() => setConfirmationMessage(null), 3000);
+  };
+
   const refreshShifts = async () => {
     try {
       const shiftList = await api.getShifts({ start: week1StartIso, end: week2EndIso }, user.token);
@@ -306,6 +429,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       }
     };
     load();
+    loadNotifications();
 
     const interval = setInterval(async () => {
       try {
@@ -319,13 +443,23 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
         setDailyReport(report);
         setTips(tipList as any[]);
         setPunches(punchList as Punch[]);
-      } catch {
-        // ignore polling errors
-      }
+      } catch {}
     }, 5000);
 
-    return () => clearInterval(interval);
-  }, [user.token, week1StartIso, week2EndIso, todayIso]);
+    const notifInterval = setInterval(loadNotifications, 15000);
+
+    return () => { clearInterval(interval); clearInterval(notifInterval); };
+  }, [user.token, week1StartIso, week2EndIso, todayIso, loadNotifications]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   return (
     <div className="min-h-screen">
@@ -363,6 +497,80 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
 
           <div className="flex items-center gap-3">
             <DateTimePanel />
+            <div style={{ position: 'relative' }} ref={notifRef}>
+              <button
+                onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', backgroundColor: showNotifDropdown ? '#e5e7eb' : '#f3f4f6', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'background-color 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = '#e5e7eb'}
+                onMouseLeave={e => { if (!showNotifDropdown) e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
+              >
+                <Bell style={{ width: 18, height: 18, color: '#374151' }} />
+                {userNotifications.filter(n => !n.read).length > 0 && (
+                  <span style={{ position: 'absolute', top: -2, right: -2, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px', border: '2px solid #fff' }}>
+                    {userNotifications.filter(n => !n.read).length > 9 ? '9+' : userNotifications.filter(n => !n.read).length}
+                  </span>
+                )}
+              </button>
+              {showNotifDropdown && (
+                <div style={{ position: 'absolute', right: 0, top: 48, width: 380, backgroundColor: '#fff', borderRadius: 16, boxShadow: '0 20px 60px -15px rgba(0,0,0,0.25)', border: '1px solid #e5e7eb', zIndex: 50, overflow: 'hidden' }}>
+                  <div style={{ padding: '14px 18px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ fontWeight: 600, color: '#111827', fontSize: 15, margin: 0 }}>Notifications</h3>
+                    {userNotifications.filter(n => !n.read).length > 0 && (
+                      <button onClick={handleMarkAllRead} style={{ fontSize: 12, color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
+                        <CheckCheck style={{ width: 14, height: 14 }} /> Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+                    {userNotifications.length === 0 ? (
+                      <div style={{ padding: '48px 0', textAlign: 'center' }}>
+                        <Bell style={{ width: 36, height: 36, color: '#d1d5db', margin: '0 auto 10px' }} />
+                        <p style={{ color: '#9ca3af', fontSize: 14 }}>No notifications yet</p>
+                      </div>
+                    ) : (
+                      userNotifications.slice(0, 20).map((notif) => {
+                        const typeIcons: Record<string, { bg: string; color: string; label: string }> = {
+                          new_request: { bg: '#fef3c7', color: '#d97706', label: 'Request' },
+                          shift_assigned: { bg: '#dbeafe', color: '#2563eb', label: 'Shift' },
+                          schedule_published: { bg: '#dcfce7', color: '#16a34a', label: 'Schedule' },
+                          punch_edited: { bg: '#fae8ff', color: '#9333ea', label: 'Punch' },
+                          request_approved: { bg: '#dcfce7', color: '#16a34a', label: 'Approved' },
+                          request_declined: { bg: '#fef2f2', color: '#dc2626', label: 'Declined' },
+                        };
+                        const meta = typeIcons[notif.type] || { bg: '#f3f4f6', color: '#6b7280', label: 'Info' };
+                        return (
+                          <div
+                            key={notif._id}
+                            style={{ padding: '14px 18px', cursor: 'pointer', transition: 'background-color 0.15s', backgroundColor: notif.read ? '#fff' : '#eff6ff', borderBottom: '1px solid #f9fafb' }}
+                            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                            onMouseLeave={e => e.currentTarget.style.backgroundColor = notif.read ? '#fff' : '#eff6ff'}
+                            onClick={async () => {
+                              if (!notif.read) {
+                                await api.markNotificationRead(notif._id, user.token);
+                                setUserNotifications(prev => prev.map(n => n._id === notif._id ? { ...n, read: true } : n));
+                              }
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, backgroundColor: meta.bg, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.03em', flexShrink: 0, marginTop: 2 }}>
+                                {meta.label}
+                              </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <p style={{ color: '#1f2937', fontSize: 13, lineHeight: 1.5, margin: 0 }}>{notif.message}</p>
+                                <p style={{ color: '#9ca3af', fontSize: 11, marginTop: 4 }}>
+                                  {new Date(notif.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              </div>
+                              {!notif.read && <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#2563eb', flexShrink: 0, marginTop: 6 }} />}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setShowManagerProfile(true)}
               className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white hover:shadow-lg hover:scale-105 transition-all cursor-pointer"
@@ -816,12 +1024,17 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
 
         {/* Time Punches - All Staff (latest 4) */}
         <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
               <h2 className="text-xl">Time Punches</h2>
               <p className="text-xs text-gray-500 mt-1">All punch in/out and break records</p>
             </div>
-            <Badge variant="secondary" className="rounded-full">{punches.length} records</Badge>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="rounded-xl h-8 text-xs" onClick={handleExportPunchesCSV}>
+                <Download className="w-3.5 h-3.5 mr-1" /> Print CSV
+              </Button>
+              <Badge variant="secondary" className="rounded-full">{punches.length} records</Badge>
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -830,7 +1043,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
               const punchOutTime = punch.clockOut ? new Date(punch.clockOut) : null;
               const duration = punchOutTime ? Math.round((punchOutTime.getTime() - punchInTime.getTime()) / 60000) : null;
               return (
-                <div key={punch._id} className="p-4 rounded-xl border border-gray-200 hover:border-gray-300 bg-gray-50/50 flex flex-wrap items-center gap-4">
+                <div key={punch._id} className="p-4 rounded-xl border border-gray-200 hover:border-gray-300 bg-gray-50/50 flex flex-wrap items-center gap-4 group">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-semibold">
                       {punch.employeeName?.slice(0, 2).toUpperCase() || '—'}
@@ -869,6 +1082,13 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                       </div>
                     </div>
                   </div>
+                  <button
+                    onClick={() => handleEditPunch(punch)}
+                    className="opacity-0 group-hover:opacity-100 w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 flex items-center justify-center text-blue-600 transition-all"
+                    title="Edit punch times"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               );
             })}
@@ -1012,47 +1232,137 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       })()}
 
       {/* Shifts Today Modal */}
-      <Dialog open={showShiftsModal} onOpenChange={setShowShiftsModal}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-2xl">Shifts Today</DialogTitle>
-            <DialogDescription>
-              All scheduled shifts for today, {todayLabel}
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-3 mt-4">
-            {todaysShifts.length === 0 ? (
-              <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-600">
-                No shifts scheduled for today.
-              </div>
-            ) : (
-              todaysShifts.map((shift, index) => {
-                const duration = calculateShiftDurationHours(shift.startTime, shift.endTime);
-                return (
-                  <div key={index} className="p-4 rounded-xl border border-gray-200 bg-gray-50">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white">
-                          {shift.employee.split(' ').map(n => n[0]).join('')}
-                        </div>
-                        <div>
-                          <div className="font-medium">{shift.employee}</div>
-                          <div className="text-sm text-gray-600">{shift.startTime}–{shift.endTime}</div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <Badge variant="secondary" className="mb-1">{shift.role}</Badge>
-                        <div className="text-sm text-gray-600">{formatHours(duration)} hours</div>
-                      </div>
+      {showShiftsModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.5)', overflowY: 'auto', padding: '32px 0' }}
+          onClick={() => setShowShiftsModal(false)}
+        >
+          <div
+            style={{ width: '100%', maxWidth: 960, margin: '0 24px', backgroundColor: '#fff', borderRadius: 16, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ background: 'linear-gradient(135deg, #2563eb 0%, #4f46e5 50%, #7c3aed 100%)', borderRadius: '16px 16px 0 0', padding: '24px 32px', color: '#fff' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Calendar className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.025em', margin: 0 }}>Shifts Today</h2>
+                    <p style={{ fontSize: 14, marginTop: 2, color: 'rgba(255,255,255,0.7)' }}>{todayLabel} &middot; {todaysShifts.length} shift{todaysShifts.length !== 1 ? 's' : ''} scheduled</p>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginRight: 8 }}>
+                    <div style={{ textAlign: 'center', padding: '6px 16px', borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.15)' }}>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{todaysShifts.length}</div>
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.7)' }}>Shifts</div>
+                    </div>
+                    <div style={{ textAlign: 'center', padding: '6px 16px', borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.15)' }}>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{liveEmployeeStatus.filter(e => e.status === 'working').length}</div>
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.7)' }}>Active</div>
                     </div>
                   </div>
-                );
-              })
-            )}
+                  <button
+                    onClick={() => setShowShiftsModal(false)}
+                    style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'background-color 0.2s' }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.15)'}
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: 32 }}>
+              {todaysShifts.length === 0 ? (
+                <div style={{ padding: '64px 0', textAlign: 'center' }}>
+                  <div style={{ width: 80, height: 80, borderRadius: '50%', backgroundColor: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+                    <Calendar style={{ width: 40, height: 40, color: '#d1d5db' }} />
+                  </div>
+                  <p style={{ color: '#6b7280', fontWeight: 600, fontSize: 20 }}>No shifts scheduled today</p>
+                  <p style={{ color: '#9ca3af', fontSize: 14, marginTop: 8 }}>Add shifts through the schedule builder to see them here</p>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 20 }}>
+                  {todaysShifts.map((shift, index) => {
+                    const duration = calculateShiftDurationHours(shift.startTime, shift.endTime);
+                    const statusEmp = liveEmployeeStatus.find(e => e.name === shift.employee);
+                    const isWorking = statusEmp?.status === 'working';
+                    const isOnBreak = statusEmp?.status === 'break';
+                    const roleColorMap: Record<string, { bg: string; light: string; border: string }> = {
+                      Server: { bg: '#7c3aed', light: '#f5f3ff', border: '#ddd6fe' },
+                      Bartender: { bg: '#ea580c', light: '#fff7ed', border: '#fed7aa' },
+                      Chef: { bg: '#dc2626', light: '#fef2f2', border: '#fecaca' },
+                      Manager: { bg: '#2563eb', light: '#eff6ff', border: '#bfdbfe' },
+                    };
+                    const colors = roleColorMap[shift.role] || { bg: '#6b7280', light: '#f9fafb', border: '#e5e7eb' };
+                    const cardBg = isWorking ? '#f0fdf4' : isOnBreak ? '#fffbeb' : colors.light;
+                    const cardBorder = isWorking ? '#bbf7d0' : isOnBreak ? '#fde68a' : colors.border;
+
+                    return (
+                      <div
+                        key={index}
+                        style={{ borderRadius: 16, overflow: 'hidden', border: `2px solid ${cardBorder}`, backgroundColor: cardBg, transition: 'box-shadow 0.2s' }}
+                        onMouseEnter={e => e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.1)'}
+                        onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
+                      >
+                        {/* Colored accent bar */}
+                        <div style={{ height: 5, backgroundColor: isWorking ? '#22c55e' : isOnBreak ? '#f59e0b' : colors.bg }} />
+
+                        <div style={{ padding: 24 }}>
+                          {/* Employee info */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+                            <div style={{ width: 56, height: 56, borderRadius: 16, backgroundColor: colors.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 18, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
+                              {shift.employee.split(' ').map(n => n[0]).join('')}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, color: '#111827', fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shift.employee}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12, padding: '3px 10px', borderRadius: 999, color: '#fff', fontWeight: 600, backgroundColor: colors.bg }}>
+                                  {shift.role}
+                                </span>
+                                {isWorking && (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 10px', borderRadius: 999, fontWeight: 600, backgroundColor: '#dcfce7', color: '#166534' }}>
+                                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#22c55e', animation: 'pulse 2s infinite' }} />
+                                    Active
+                                  </span>
+                                )}
+                                {isOnBreak && (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 10px', borderRadius: 999, fontWeight: 600, backgroundColor: '#fef3c7', color: '#92400e' }}>
+                                    <Coffee style={{ width: 12, height: 12 }} />
+                                    On Break
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Schedule bar */}
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 12, padding: '14px 18px', backgroundColor: 'rgba(0,0,0,0.04)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <Clock style={{ width: 18, height: 18, color: '#9ca3af' }} />
+                              <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: '#1f2937', fontSize: 16 }}>{shift.startTime}</span>
+                              <span style={{ color: '#9ca3af', fontSize: 16 }}>→</span>
+                              <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: '#1f2937', fontSize: 16 }}>{shift.endTime}</span>
+                            </div>
+                            <span style={{ fontSize: 14, fontWeight: 700, padding: '4px 14px', borderRadius: 10, backgroundColor: colors.bg + '18', color: colors.bg }}>
+                              {formatHours(duration)}h
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
 
       {/* Active Employees Modal */}
       <Dialog open={showEmployeesModal} onOpenChange={setShowEmployeesModal}>
@@ -1401,27 +1711,69 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       </Dialog>
 
       {/* Publish Schedule Modal */}
-      <Dialog open={showPublishModal} onOpenChange={setShowPublishModal}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-2xl">Publish Schedule</DialogTitle>
-            <DialogDescription>
-              Confirm to publish the current schedule
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-4 mt-4">
-            <p className="text-gray-600">Are you sure you want to publish the current schedule?</p>
+      {showPublishModal && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-sm overflow-y-auto py-8" onClick={() => setShowPublishModal(false)}>
+          <div className="w-full max-w-2xl mx-4 bg-white rounded-3xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-8 py-6 text-white" style={{ background: 'linear-gradient(to right, #2563eb, #4f46e5)' }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold">Publish Schedule</h2>
+                  <p className="text-sm mt-1" style={{ color: '#bfdbfe' }}>{formatMonthDay(biWeeklyStart)} – {formatMonthDay(biWeeklyEnd)}</p>
+                </div>
+                <button onClick={() => setShowPublishModal(false)} className="w-10 h-10 rounded-full flex items-center justify-center transition-colors" style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-8 space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 rounded-2xl bg-blue-50 border border-blue-100 text-center">
+                  <div className="text-3xl font-bold text-blue-700">
+                    {shifts.filter(s => { const d = (s.date || '').split('T')[0]; return d >= week1StartIso && d <= week2EndIso; }).length}
+                  </div>
+                  <div className="text-sm text-blue-600 mt-1">Total Shifts</div>
+                </div>
+                <div className="p-4 rounded-2xl bg-green-50 border border-green-100 text-center">
+                  <div className="text-3xl font-bold text-green-700">
+                    {new Set(shifts.filter(s => { const d = (s.date || '').split('T')[0]; return d >= week1StartIso && d <= week2EndIso; }).map(s => s.employee)).size}
+                  </div>
+                  <div className="text-sm text-green-600 mt-1">Employees</div>
+                </div>
+              </div>
 
-            <Button
-              className="w-full justify-start rounded-xl h-12 bg-[#2563EB] hover:bg-[#1d4ed8]"
-              onClick={handlePublishSchedule}
-            >
-              Publish Schedule
-            </Button>
+              <div className="rounded-2xl border border-gray-200 p-4 bg-gray-50 space-y-2">
+                <div className="text-sm font-semibold text-gray-700">What happens when you publish:</div>
+                <ul className="space-y-1.5 text-sm text-gray-600">
+                  <li className="flex items-center gap-2"><Bell className="w-3.5 h-3.5 text-blue-500" /> All employees with shifts will be notified</li>
+                  <li className="flex items-center gap-2"><Shield className="w-3.5 h-3.5 text-purple-500" /> Admin will be notified about the publication</li>
+                  <li className="flex items-center gap-2"><Calendar className="w-3.5 h-3.5 text-green-500" /> Shifts will be marked as published</li>
+                </ul>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={handlePrintSchedule}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-2xl border-2 border-gray-200 px-6 py-4 font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <Printer className="w-5 h-5" />
+                  Print Schedule
+                </button>
+                <button
+                  onClick={handlePublishScheduleReal}
+                  disabled={publishLoading}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-2xl px-6 py-4 font-semibold text-white shadow-lg transition-all disabled:opacity-60"
+                  style={{ background: 'linear-gradient(to right, #2563eb, #4f46e5)' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'linear-gradient(to right, #1d4ed8, #4338ca)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'linear-gradient(to right, #2563eb, #4f46e5)'}
+                >
+                  {publishLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Bell className="w-5 h-5" />}
+                  {publishLoading ? 'Publishing...' : 'Publish & Notify'}
+                </button>
+              </div>
+            </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
 
       {/* Day Schedule Modal */}
       <Dialog open={showDayScheduleModal} onOpenChange={setShowDayScheduleModal}>
@@ -1469,12 +1821,17 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                 <h2 className="text-2xl font-bold text-gray-900">All Time Punches</h2>
                 <p className="text-sm text-gray-500 mt-1">{punches.length} records — latest first</p>
               </div>
-              <button
-                onClick={() => setShowAllPunchesModal(false)}
-                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" className="rounded-xl h-8 text-xs" onClick={handleExportPunchesCSV}>
+                  <Download className="w-3.5 h-3.5 mr-1" /> Print CSV
+                </Button>
+                <button
+                  onClick={() => setShowAllPunchesModal(false)}
+                  className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
             {/* Records */}
@@ -1520,6 +1877,13 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                               {Math.floor(dur / 60)}h {dur % 60}m
                             </span>
                           )}
+                          <button
+                            onClick={() => { setShowAllPunchesModal(false); handleEditPunch(punch); }}
+                            className="w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 flex items-center justify-center text-blue-600 transition-all"
+                            title="Edit punch times"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
                         </div>
 
                         {/* Bottom: Times row */}
@@ -1557,6 +1921,61 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
         </div>
       )}
+
+      {/* Edit Punch Modal */}
+      <Dialog open={showEditPunchModal} onOpenChange={setShowEditPunchModal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl">Edit Punch Record</DialogTitle>
+            <DialogDescription>
+              Fix punch in/out times for {editingPunch?.employeeName}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5 mt-4">
+            <div className="flex items-center gap-3 p-4 rounded-xl bg-blue-50 border border-blue-100">
+              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold">
+                {editingPunch?.employeeName?.slice(0, 2).toUpperCase() || '?'}
+              </div>
+              <div>
+                <div className="font-semibold text-gray-900">{editingPunch?.employeeName}</div>
+                <div className="text-xs text-gray-500">
+                  Original: {editingPunch ? new Date(editingPunch.clockIn).toLocaleString() : ''}
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Punch In Time</Label>
+              <Input
+                type="datetime-local"
+                value={editPunchForm.clockIn}
+                onChange={(e) => setEditPunchForm({ ...editPunchForm, clockIn: e.target.value })}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Punch Out Time (leave blank if still active)</Label>
+              <Input
+                type="datetime-local"
+                value={editPunchForm.clockOut}
+                onChange={(e) => setEditPunchForm({ ...editPunchForm, clockOut: e.target.value })}
+                className="rounded-xl h-11"
+              />
+            </div>
+            <p className="text-xs text-gray-400">The employee will be notified that their punch times were edited.</p>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setShowEditPunchModal(false)}>Cancel</Button>
+              <Button
+                className="flex-1 rounded-xl bg-[#2563EB] hover:bg-[#1d4ed8]"
+                onClick={handleSaveEditPunch}
+                disabled={editPunchSaving}
+              >
+                {editPunchSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                Save Changes
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Manager Profile Modal */}
       <Dialog open={showManagerProfile} onOpenChange={setShowManagerProfile}>

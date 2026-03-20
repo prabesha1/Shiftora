@@ -1,4 +1,4 @@
-import { Calendar, DollarSign, Clock, ChevronRight, LogIn, LogOut, Coffee, Loader2, Settings, Key } from 'lucide-react';
+import { Calendar, DollarSign, Clock, ChevronRight, LogIn, LogOut, Coffee, Loader2, Settings, Key, Bell, CheckCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Label } from './ui/label';
 import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import { DateTimePanel } from './datetime-panel';
 import { calculateShiftDurationHours, formatHours, toISODate } from '../utils/time';
@@ -47,11 +47,37 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const [changePasswordForm, setChangePasswordForm] = useState({ current: '', new: '', confirm: '' });
   const [changePasswordMessage, setChangePasswordMessage] = useState<string | null>(null);
   const [liveTime, setLiveTime] = useState(() => new Date());
+  const [userNotifications, setUserNotifications] = useState<any[]>([]);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
   const todayIso = toISODate(new Date());
 
   useEffect(() => {
     const t = setInterval(() => setLiveTime(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  const loadNotifications = useCallback(async () => {
+    try {
+      const notifs = await api.getUserNotifications(user.token);
+      setUserNotifications(notifs);
+    } catch {}
+  }, [user.token]);
+
+  useEffect(() => {
+    loadNotifications();
+    const interval = setInterval(loadNotifications, 15000);
+    return () => clearInterval(interval);
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   useEffect(() => {
@@ -309,6 +335,82 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
 
           <div className="flex items-center gap-3">
             <DateTimePanel />
+            <div style={{ position: 'relative' }} ref={notifRef}>
+              <button
+                onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', backgroundColor: showNotifDropdown ? '#e5e7eb' : '#f3f4f6', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'background-color 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = '#e5e7eb'}
+                onMouseLeave={e => { if (!showNotifDropdown) e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
+              >
+                <Bell style={{ width: 18, height: 18, color: '#374151' }} />
+                {userNotifications.filter(n => !n.read).length > 0 && (
+                  <span style={{ position: 'absolute', top: -2, right: -2, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px', border: '2px solid #fff' }}>
+                    {userNotifications.filter(n => !n.read).length > 9 ? '9+' : userNotifications.filter(n => !n.read).length}
+                  </span>
+                )}
+              </button>
+              {showNotifDropdown && (
+                <div style={{ position: 'absolute', right: 0, top: 48, width: 380, backgroundColor: '#fff', borderRadius: 16, boxShadow: '0 20px 60px -15px rgba(0,0,0,0.25)', border: '1px solid #e5e7eb', zIndex: 50, overflow: 'hidden' }}>
+                  <div style={{ padding: '14px 18px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ fontWeight: 600, color: '#111827', fontSize: 15, margin: 0 }}>Notifications</h3>
+                    {userNotifications.filter(n => !n.read).length > 0 && (
+                      <button onClick={async () => {
+                        await api.markAllNotificationsRead(user.token);
+                        setUserNotifications(prev => prev.map(n => ({ ...n, read: true })));
+                      }} style={{ fontSize: 12, color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
+                        <CheckCheck style={{ width: 14, height: 14 }} /> Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+                    {userNotifications.length === 0 ? (
+                      <div style={{ padding: '48px 0', textAlign: 'center' }}>
+                        <Bell style={{ width: 36, height: 36, color: '#d1d5db', margin: '0 auto 10px' }} />
+                        <p style={{ color: '#9ca3af', fontSize: 14 }}>No notifications yet</p>
+                      </div>
+                    ) : (
+                      userNotifications.slice(0, 20).map((notif) => {
+                        const typeIcons: Record<string, { bg: string; color: string; label: string }> = {
+                          shift_assigned: { bg: '#dbeafe', color: '#2563eb', label: 'Shift' },
+                          schedule_published: { bg: '#dcfce7', color: '#16a34a', label: 'Schedule' },
+                          punch_edited: { bg: '#fae8ff', color: '#9333ea', label: 'Punch' },
+                          request_approved: { bg: '#dcfce7', color: '#16a34a', label: 'Approved' },
+                          request_declined: { bg: '#fef2f2', color: '#dc2626', label: 'Declined' },
+                        };
+                        const meta = typeIcons[notif.type] || { bg: '#f3f4f6', color: '#6b7280', label: 'Info' };
+                        return (
+                          <div
+                            key={notif._id}
+                            style={{ padding: '14px 18px', cursor: 'pointer', transition: 'background-color 0.15s', backgroundColor: notif.read ? '#fff' : '#eff6ff', borderBottom: '1px solid #f9fafb' }}
+                            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                            onMouseLeave={e => e.currentTarget.style.backgroundColor = notif.read ? '#fff' : '#eff6ff'}
+                            onClick={async () => {
+                              if (!notif.read) {
+                                await api.markNotificationRead(notif._id, user.token);
+                                setUserNotifications(prev => prev.map(n => n._id === notif._id ? { ...n, read: true } : n));
+                              }
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, backgroundColor: meta.bg, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.03em', flexShrink: 0, marginTop: 2 }}>
+                                {meta.label}
+                              </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <p style={{ color: '#1f2937', fontSize: 13, lineHeight: 1.5, margin: 0 }}>{notif.message}</p>
+                                <p style={{ color: '#9ca3af', fontSize: 11, marginTop: 4 }}>
+                                  {new Date(notif.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              </div>
+                              {!notif.read && <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#2563eb', flexShrink: 0, marginTop: 6 }} />}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <Button variant="ghost" size="sm" className="hidden sm:flex items-center gap-2" onClick={() => setShowProfileModal(true)}>
               Profile
             </Button>
@@ -322,8 +424,8 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             >
               {user.name ? user.name[0].toUpperCase() : 'E'}
             </button>
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               onClick={onLogout}
               className="hidden sm:inline-flex"
             >

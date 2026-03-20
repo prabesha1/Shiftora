@@ -158,6 +158,19 @@ export const api = {
 
   getNotifications: (token?: string) =>
     request<Notification[]>('/api/notifications', 'GET', undefined, token),
+
+  updatePunch: (id: string, data: { clockIn?: string; clockOut?: string | null }, token?: string) =>
+    request(`/api/punches/${id}`, 'PATCH', data, token),
+
+  getUserNotifications: (token?: string) =>
+    request<any[]>('/api/user-notifications', 'GET', undefined, token),
+  markNotificationRead: (id: string, token?: string) =>
+    request(`/api/user-notifications/${id}/read`, 'PATCH', undefined, token),
+  markAllNotificationsRead: (token?: string) =>
+    request('/api/user-notifications/read-all', 'POST', undefined, token),
+
+  publishSchedule: (data: { start: string; end: string }, token?: string) =>
+    request<{ published: boolean; count: number }>('/api/shifts/publish', 'POST', data, token),
 };
 
 export const loadStoredUser = (): User | null => {

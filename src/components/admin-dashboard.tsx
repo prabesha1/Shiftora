@@ -1,14 +1,14 @@
-import { Users, DollarSign, Building2, Shield, Settings, ChevronRight, Trash2, Crown, ArrowUpCircle, ArrowDownCircle, Plus, Calendar, Clock, BarChart3, FileText, UserX, Search, Bell, Download, CheckCircle2, AlertTriangle, Info, History, Activity, Key, Eye } from 'lucide-react';
+import { Users, DollarSign, Building2, Shield, Settings, ChevronRight, Trash2, Crown, ArrowUpCircle, ArrowDownCircle, Plus, Calendar, Clock, BarChart3, FileText, UserX, Search, Bell, Download, CheckCircle2, AlertTriangle, Info, Eye, Loader2, CheckCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
-import { formatLongDate, toISODate } from '../utils/time';
+import { addDays, calculateShiftDurationHours, formatLongDate, startOfWeek, toISODate } from '../utils/time';
 import { api } from '../api/client';
-import type { AuditEntry, Notification as AppNotification, Settings as AppSettings } from '../api/client';
+import type { Notification as AppNotification, Settings as AppSettings } from '../api/client';
 import { DateTimePanel } from './datetime-panel';
 
 type Props = {
@@ -40,6 +40,17 @@ type Punch = {
   breaks: { start: string; end?: string }[];
 };
 
+type Shift = {
+  _id?: string;
+  employee: string;
+  employeeId?: string;
+  role: string;
+  startTime: string;
+  endTime: string;
+  date: string;
+  durationHours?: number;
+};
+
 type ToastState = { message: string; type: 'success' | 'error' | 'info' } | null;
 
 export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
@@ -48,6 +59,10 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
   const today = new Date();
   const todayIso = toISODate(today);
   const todayLabel = formatLongDate(today);
+  const biWeeklyStart = startOfWeek(today);
+  const week1End = addDays(biWeeklyStart, 6);
+  const week1StartIso = toISODate(biWeeklyStart);
+  const week1EndIso = toISODate(addDays(biWeeklyStart, 13));
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [punches, setPunches] = useState<Punch[]>([]);
@@ -65,9 +80,9 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
   const [showAdminProfile, setShowAdminProfile] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showDepartmentModal, setShowDepartmentModal] = useState(false);
-  const [showAuditLogModal, setShowAuditLogModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showAttendanceModal, setShowAttendanceModal] = useState(false);
+  const [showShiftsModal, setShowShiftsModal] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
 
@@ -75,8 +90,11 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
 
-  const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [shifts, setShifts] = useState<Shift[]>([]);
+  const [userNotifications, setUserNotifications] = useState<any[]>([]);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [settingsEditing, setSettingsEditing] = useState(false);
@@ -92,9 +110,9 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
   const [tipAmount, setTipAmount] = useState('');
   const [tipNotes, setTipNotes] = useState('');
 
-  const [finStartDate, setFinStartDate] = useState(todayIso);
-  const [finEndDate, setFinEndDate] = useState(todayIso);
-  const [finRangeReport, setFinRangeReport] = useState<any>(null);
+  const [finSelectedDate, setFinSelectedDate] = useState(todayIso);
+  const [finDateReport, setFinDateReport] = useState<any>(null);
+  const [finLoading, setFinLoading] = useState(false);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToast({ message, type });
@@ -103,7 +121,7 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
 
   const getId = (emp: Employee) => emp._id || '';
 
-  const liveEmployeeStatus = employees.map((emp) => {
+  const liveEmployeeStatus = useMemo(() => employees.map((emp) => {
     const openPunch = punches.find((p) => (p.employeeId === emp._id || p.employeeId === String((emp as any).userId ?? '')) && !p.clockOut);
     const lastBreak = openPunch?.breaks?.[openPunch.breaks.length - 1];
     const durationMinutes = openPunch ? Math.max(0, (Date.now() - new Date(openPunch.clockIn).getTime()) / 60000) : 0;
@@ -116,7 +134,7 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
       avatar: emp.name.split(' ').map((n) => n[0]).join(''),
       currentDuration: openPunch ? `${Math.floor(durationMinutes / 60)}h ${Math.floor(durationMinutes % 60)}m` : '',
     };
-  });
+  }), [employees, punches]);
 
   const groupedByDepartment = useMemo(() => {
     const groups: Record<string, Employee[]> = {};
@@ -128,10 +146,10 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
     return groups;
   }, [employees]);
 
-  const groupedByLevel = {
+  const groupedByLevel = useMemo(() => ({
     Manager: employees.filter(e => e.level === 'Manager'),
     Employee: employees.filter(e => e.level !== 'Manager'),
-  };
+  }), [employees]);
 
   const filteredEmployees = useMemo(() => {
     if (!employeeSearch.trim()) return employees;
@@ -157,15 +175,17 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
   useEffect(() => {
     const load = async () => {
       try {
-        const [empList, punchList, tipList, overview] = await Promise.all([
+        const [empList, punchList, tipList, overview, shiftList] = await Promise.all([
           api.getEmployees(user.token),
           api.getPunches({}, user.token),
           api.getTips(todayIso, user.token),
           api.getOverviewReport(user.token),
+          api.getShifts({ start: week1StartIso, end: week1EndIso }, user.token),
         ]);
         setEmployees(empList as Employee[]);
         setPunches(punchList as Punch[]);
         setTips(tipList as any[]);
+        setShifts(shiftList as Shift[]);
         if (overview?.daily) setDailyReport(overview.daily);
         if (overview?.weekly) setWeeklyReport(overview.weekly);
       } catch (err: any) {
@@ -189,11 +209,34 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
       } catch { /* polling */ }
     }, 10000);
     return () => clearInterval(interval);
-  }, [user.token, todayIso, showToast]);
+  }, [user.token, todayIso, week1StartIso, week1EndIso, showToast]);
 
   useEffect(() => {
     api.getNotifications(user.token).then(setNotifications).catch(() => {});
   }, [user.token]);
+
+  const loadUserNotifications = useCallback(async () => {
+    try {
+      const notifs = await api.getUserNotifications(user.token);
+      setUserNotifications(notifs);
+    } catch {}
+  }, [user.token]);
+
+  useEffect(() => {
+    loadUserNotifications();
+    const interval = setInterval(loadUserNotifications, 15000);
+    return () => clearInterval(interval);
+  }, [loadUserNotifications]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handlePromote = async (employee: Employee) => {
     const isManager = employee.level === 'Manager';
@@ -267,14 +310,61 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
     setShowAttendanceModal(true);
   };
 
-  const handleLoadAuditLog = async () => {
-    try { const logs = await api.getAuditLog(100, user.token); setAuditLog(logs); } catch { setAuditLog([]); }
-    setShowAuditLogModal(true);
+  const handleExportPunchesCSV = () => {
+    const sorted = [...punches].sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime());
+    const header = 'Employee,Punch In,Punch Out,Duration (min),Breaks\n';
+    const rows = sorted.map(p => {
+      const pIn = new Date(p.clockIn);
+      const pOut = p.clockOut ? new Date(p.clockOut) : null;
+      const dur = pOut ? Math.round((pOut.getTime() - pIn.getTime()) / 60000) : '';
+      const breaks = (p.breaks || []).map((b: any) => {
+        const s = new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const e = b.end ? new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'active';
+        return `${s}-${e}`;
+      }).join('; ');
+      return `"${p.employeeName}","${pIn.toLocaleString()}","${pOut ? pOut.toLocaleString() : '—'}","${dur}","${breaks}"`;
+    }).join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `shiftora-punches-${todayIso}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    showToast('Punch records exported as CSV.', 'info');
   };
 
+  const todaysShifts = useMemo(() =>
+    shifts.filter(s => (s.date || '').split('T')[0] === todayIso),
+    [shifts, todayIso]
+  );
+
+  const upcomingShifts = useMemo(() => {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return shifts
+      .filter(s => {
+        const d = (s.date || '').split('T')[0];
+        return d > todayIso;
+      })
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(0, 5);
+  }, [shifts, todayIso, today]);
+
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+
   const handleLoadSettings = async () => {
-    try { const s = await api.getSettings(user.token); setSettings(s); setSettingsForm(s); } catch { /* */ }
     setShowSettingsModal(true);
+    setSettingsLoading(true);
+    setSettingsError(null);
+    try {
+      const s = await api.getSettings(user.token);
+      setSettings(s);
+      setSettingsForm(s);
+    } catch (err: any) {
+      setSettingsError(err.message || 'Failed to load settings.');
+    } finally {
+      setSettingsLoading(false);
+    }
   };
 
   const handleSaveSettings = async () => {
@@ -286,19 +376,54 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
     } catch (err: any) { showToast(err.message || 'Failed to save settings.', 'error'); }
   };
 
-  const handleFetchFinancialRange = async () => {
-    try { const report = await api.getDailyReport(finStartDate, user.token); setFinRangeReport(report); } catch { setFinRangeReport(null); }
+  const handleFetchFinancialDate = async () => {
+    setFinLoading(true);
+    try {
+      const report = await api.getDailyReport(finSelectedDate, user.token);
+      setFinDateReport(report);
+    } catch {
+      setFinDateReport(null);
+      showToast('Failed to load report for selected date.', 'error');
+    } finally {
+      setFinLoading(false);
+    }
   };
 
   const toggleBulkSelect = (id: string) => {
     setSelectedIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
 
-  const deptColorMap: Record<string, string> = {
-    'Front of House': 'blue',
-    'Kitchen': 'red',
-    'Bar': 'purple',
-    'Management': 'amber',
+  const deptStyles: Record<string, { card: string; icon: string; iconText: string; viewText: string }> = {
+    'Front of House': {
+      card: 'border-blue-200 bg-blue-50',
+      icon: 'bg-blue-100',
+      iconText: 'text-blue-600',
+      viewText: 'text-blue-600',
+    },
+    'Kitchen': {
+      card: 'border-red-200 bg-red-50',
+      icon: 'bg-red-100',
+      iconText: 'text-red-600',
+      viewText: 'text-red-600',
+    },
+    'Bar': {
+      card: 'border-purple-200 bg-purple-50',
+      icon: 'bg-purple-100',
+      iconText: 'text-purple-600',
+      viewText: 'text-purple-600',
+    },
+    'Management': {
+      card: 'border-amber-200 bg-amber-50',
+      icon: 'bg-amber-100',
+      iconText: 'text-amber-600',
+      viewText: 'text-amber-600',
+    },
+  };
+  const defaultDeptStyle = {
+    card: 'border-gray-200 bg-gray-50',
+    icon: 'bg-gray-100',
+    iconText: 'text-gray-600',
+    viewText: 'text-gray-600',
   };
 
   return (
@@ -321,15 +446,93 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => { api.getNotifications(user.token).then(setNotifications).catch(() => {}); setShowNotifications(true); }}
-              className="relative w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors"
-            >
-              <Bell className="w-4 h-4 text-gray-600" />
-              {notifications.length > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] flex items-center justify-center font-bold">{notifications.length}</span>
+            <div style={{ position: 'relative' }} ref={notifRef}>
+              <button
+                onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', backgroundColor: showNotifDropdown ? '#e5e7eb' : '#f3f4f6', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'background-color 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = '#e5e7eb'}
+                onMouseLeave={e => { if (!showNotifDropdown) e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
+              >
+                <Bell style={{ width: 18, height: 18, color: '#374151' }} />
+                {(userNotifications.filter(n => !n.read).length + notifications.length) > 0 && (
+                  <span style={{ position: 'absolute', top: -2, right: -2, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px', border: '2px solid #fff' }}>
+                    {(userNotifications.filter(n => !n.read).length + notifications.length) > 9 ? '9+' : userNotifications.filter(n => !n.read).length + notifications.length}
+                  </span>
+                )}
+              </button>
+              {showNotifDropdown && (
+                <div style={{ position: 'absolute', right: 0, top: 48, width: 380, backgroundColor: '#fff', borderRadius: 16, boxShadow: '0 20px 60px -15px rgba(0,0,0,0.25)', border: '1px solid #e5e7eb', zIndex: 50, overflow: 'hidden' }}>
+                  <div style={{ padding: '14px 18px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ fontWeight: 600, color: '#111827', fontSize: 15, margin: 0 }}>Notifications</h3>
+                    {userNotifications.filter(n => !n.read).length > 0 && (
+                      <button onClick={async () => {
+                        await api.markAllNotificationsRead(user.token);
+                        setUserNotifications(prev => prev.map(n => ({ ...n, read: true })));
+                      }} style={{ fontSize: 12, color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
+                        <CheckCheck style={{ width: 14, height: 14 }} /> Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+                    {notifications.map((n, i) => (
+                      <div key={`sys-${i}`} style={{ padding: '14px 18px', backgroundColor: '#fffbeb', borderBottom: '1px solid #f9fafb' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, backgroundColor: '#fef3c7', color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.03em', flexShrink: 0, marginTop: 2 }}>
+                            Alert
+                          </span>
+                          <p style={{ color: '#1f2937', fontSize: 13, lineHeight: 1.5, margin: 0 }}>{n.message}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {userNotifications.length === 0 && notifications.length === 0 ? (
+                      <div style={{ padding: '48px 0', textAlign: 'center' }}>
+                        <Bell style={{ width: 36, height: 36, color: '#d1d5db', margin: '0 auto 10px' }} />
+                        <p style={{ color: '#9ca3af', fontSize: 14 }}>No notifications yet</p>
+                      </div>
+                    ) : (
+                      userNotifications.slice(0, 20).map((notif) => {
+                        const typeIcons: Record<string, { bg: string; color: string; label: string }> = {
+                          new_request: { bg: '#fef3c7', color: '#d97706', label: 'Request' },
+                          shift_assigned: { bg: '#dbeafe', color: '#2563eb', label: 'Shift' },
+                          schedule_published: { bg: '#dcfce7', color: '#16a34a', label: 'Schedule' },
+                          punch_edited: { bg: '#fae8ff', color: '#9333ea', label: 'Punch' },
+                          request_approved: { bg: '#dcfce7', color: '#16a34a', label: 'Approved' },
+                          request_declined: { bg: '#fef2f2', color: '#dc2626', label: 'Declined' },
+                        };
+                        const meta = typeIcons[notif.type] || { bg: '#f3f4f6', color: '#6b7280', label: 'Info' };
+                        return (
+                          <div
+                            key={notif._id}
+                            style={{ padding: '14px 18px', cursor: 'pointer', transition: 'background-color 0.15s', backgroundColor: notif.read ? '#fff' : '#eff6ff', borderBottom: '1px solid #f9fafb' }}
+                            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                            onMouseLeave={e => e.currentTarget.style.backgroundColor = notif.read ? '#fff' : '#eff6ff'}
+                            onClick={async () => {
+                              if (!notif.read) {
+                                await api.markNotificationRead(notif._id, user.token);
+                                setUserNotifications(prev => prev.map(n => n._id === notif._id ? { ...n, read: true } : n));
+                              }
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, backgroundColor: meta.bg, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.03em', flexShrink: 0, marginTop: 2 }}>
+                                {meta.label}
+                              </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <p style={{ color: '#1f2937', fontSize: 13, lineHeight: 1.5, margin: 0 }}>{notif.message}</p>
+                                <p style={{ color: '#9ca3af', fontSize: 11, marginTop: 4 }}>
+                                  {new Date(notif.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              </div>
+                              {!notif.read && <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#2563eb', flexShrink: 0, marginTop: 6 }} />}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
               )}
-            </button>
+            </div>
             <DateTimePanel />
             <button
               onClick={() => setShowAdminProfile(true)}
@@ -509,9 +712,6 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
                 <Button variant="outline" className="w-full justify-start rounded-xl h-12" onClick={() => onNavigate('wages')}>
                   <DollarSign className="w-4 h-4 mr-2" /> Wages & tips report
                 </Button>
-                <Button variant="outline" className="w-full justify-start rounded-xl h-12" onClick={handleLoadAuditLog}>
-                  <History className="w-4 h-4 mr-2" /> Activity log
-                </Button>
                 <Button variant="outline" className="w-full justify-start rounded-xl h-12" onClick={handleLoadSettings}>
                   <Settings className="w-4 h-4 mr-2" /> System settings
                 </Button>
@@ -546,108 +746,188 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
         </div>
 
-        {/* Departments */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-semibold">Departments</h2>
-              <p className="text-xs text-gray-500 mt-1">Team structure overview</p>
+        {/* Departments + Today's Shifts — side by side */}
+        <div className="grid lg:grid-cols-2 gap-6">
+          {/* Departments (compact) */}
+          <div className="bg-white rounded-2xl p-5 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Departments</h2>
+              <span className="text-xs text-gray-500">{Object.keys(groupedByDepartment).length} depts &bull; {employees.length} staff</span>
             </div>
-            <span className="text-sm text-gray-500">{Object.keys(groupedByDepartment).length} departments &bull; {employees.length} staff</span>
+
+            <div className="grid grid-cols-2 gap-3">
+              {Object.entries(groupedByDepartment).map(([dept, emps]) => {
+                const ds = deptStyles[dept] || defaultDeptStyle;
+                const managers = emps.filter(e => e.level === 'Manager');
+                return (
+                  <button
+                    key={dept}
+                    onClick={() => { setSelectedDepartment(dept); setShowDepartmentModal(true); }}
+                    className={`rounded-xl p-3 border text-left transition-all hover:shadow-sm ${ds.card}`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className={`w-7 h-7 rounded-lg ${ds.icon} flex items-center justify-center`}>
+                        <Building2 className={`w-3.5 h-3.5 ${ds.iconText}`} />
+                      </div>
+                      <span className="text-xl font-bold">{emps.length}</span>
+                    </div>
+                    <div className="text-sm font-medium">{dept}</div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {managers.length > 0 ? `${managers.map(m => m.name.split(' ')[0]).join(', ')} — Mgr` : 'No manager'}
+                    </div>
+                    <div className={`mt-1 flex items-center gap-1 text-[11px] font-medium ${ds.viewText}`}>
+                      <Eye className="w-3 h-3" /> View
+                    </div>
+                  </button>
+                );
+              })}
+              {Object.keys(groupedByDepartment).length === 0 && (
+                <div className="col-span-2 p-3 rounded-xl border border-dashed border-gray-300 text-sm text-gray-600">
+                  No departments yet.
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {Object.entries(groupedByDepartment).map(([dept, emps]) => {
-              const color = deptColorMap[dept] || 'gray';
-              const managers = emps.filter(e => e.level === 'Manager');
-              return (
-                <button
-                  key={dept}
-                  onClick={() => { setSelectedDepartment(dept); setShowDepartmentModal(true); }}
-                  className={`rounded-xl p-5 border-2 text-left transition-all hover:shadow-md border-${color}-200 bg-${color}-50`}
-                >
-                  <div className={`w-10 h-10 rounded-xl bg-${color}-100 flex items-center justify-center mb-3`}>
-                    <Building2 className={`w-5 h-5 text-${color}-600`} />
-                  </div>
-                  <div className="font-semibold mb-1">{dept}</div>
-                  <div className="text-3xl font-bold mb-1">{emps.length}</div>
-                  <div className="text-xs text-gray-600">
-                    {managers.length > 0 ? `${managers.map(m => m.name.split(' ')[0]).join(', ')} — Mgr` : 'No manager assigned'}
-                  </div>
-                  <div className={`mt-2 flex items-center gap-1 text-xs font-medium text-${color}-600`}>
-                    <Eye className="w-3.5 h-3.5" /> View team
-                  </div>
-                </button>
-              );
-            })}
-            {Object.keys(groupedByDepartment).length === 0 && (
-              <div className="sm:col-span-2 lg:col-span-4 p-4 rounded-xl border border-dashed border-gray-300 text-sm text-gray-600">
-                No departments yet — add employees to populate.
+          {/* Today's Shifts & Upcoming */}
+          <div className="bg-white rounded-2xl p-5 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Today&apos;s shifts</h2>
+              <button
+                onClick={() => setShowShiftsModal(true)}
+                className="text-xs text-[#2563EB] font-medium hover:underline"
+              >
+                View all →
+              </button>
+            </div>
+
+            {todaysShifts.length === 0 ? (
+              <div className="p-4 rounded-xl border border-dashed border-gray-200 text-sm text-gray-500 text-center">
+                No shifts scheduled for today.
               </div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {todaysShifts.map((shift, idx) => {
+                  const dur = calculateShiftDurationHours(shift.startTime, shift.endTime);
+                  return (
+                    <div key={shift._id || idx} className="p-3 rounded-xl border border-blue-100 bg-blue-50/50 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs font-bold">
+                          {shift.employee?.split(' ').map(n => n[0]).join('') || '?'}
+                        </div>
+                        <div>
+                          <div className="font-medium text-sm">{shift.employee}</div>
+                          <div className="text-xs text-gray-500">{shift.role}</div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-medium tabular-nums">{shift.startTime} – {shift.endTime}</div>
+                        <div className="text-xs text-gray-500">{dur.toFixed(1)}h</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {upcomingShifts.length > 0 && (
+              <>
+                <div className="border-t border-gray-100 pt-3">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2">Upcoming shifts</h3>
+                </div>
+                <div className="space-y-2 max-h-36 overflow-y-auto">
+                  {upcomingShifts.map((shift, idx) => {
+                    const shiftDate = new Date(shift.date + 'T00:00:00');
+                    return (
+                      <div key={shift._id || idx} className="p-3 rounded-xl border border-gray-100 bg-gray-50 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-300 to-gray-500 flex items-center justify-center text-white text-xs font-bold">
+                            {shift.employee?.split(' ').map(n => n[0]).join('') || '?'}
+                          </div>
+                          <div>
+                            <div className="font-medium text-sm">{shift.employee}</div>
+                            <div className="text-xs text-gray-500">{shift.role}</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-medium tabular-nums">{shift.startTime} – {shift.endTime}</div>
+                          <div className="text-xs text-gray-400">{shiftDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         </div>
 
         {/* Recent Punches */}
         <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
               <h2 className="text-xl font-semibold">Recent punches</h2>
-              <p className="text-xs text-gray-500 mt-1">Latest punch in/out records</p>
+              <p className="text-xs text-gray-500 mt-1">{punches.length} total records — latest first</p>
             </div>
-            <Badge variant="secondary" className="rounded-full">{punches.length} records</Badge>
+            <Button variant="outline" size="sm" className="rounded-xl" onClick={handleExportPunchesCSV}>
+              <Download className="w-4 h-4 mr-1.5" /> Print CSV
+            </Button>
           </div>
 
-          <div className="space-y-3">
-            {[...punches].sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime()).slice(0, 4).map((punch) => {
-              const pIn = new Date(punch.clockIn);
-              const pOut = punch.clockOut ? new Date(punch.clockOut) : null;
-              const dur = pOut ? Math.round((pOut.getTime() - pIn.getTime()) / 60000) : null;
-              const isActive = !pOut;
-              return (
-                <div key={punch._id} className={`p-4 rounded-xl border flex flex-wrap items-center gap-4 ${isActive ? 'border-green-200 bg-green-50/50' : 'border-gray-200 bg-gray-50/50'}`}>
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold ${isActive ? 'bg-green-600' : 'bg-blue-600'}`}>
-                      {punch.employeeName?.slice(0, 2).toUpperCase() || '—'}
+          {punches.length === 0 ? (
+            <div className="py-10 text-center rounded-xl border border-dashed border-gray-200">
+              <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+              <p className="text-sm text-gray-500">No punch records yet</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {[...punches].sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime()).slice(0, 4).map((punch) => {
+                const pIn = new Date(punch.clockIn);
+                const pOut = punch.clockOut ? new Date(punch.clockOut) : null;
+                const dur = pOut ? Math.round((pOut.getTime() - pIn.getTime()) / 60000) : null;
+                const isActive = !pOut;
+                return (
+                  <div key={punch._id} className={`rounded-xl border p-4 transition-colors ${isActive ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-gray-50/50 hover:bg-white'}`}>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ${isActive ? 'bg-emerald-600' : 'bg-blue-600'}`}>
+                        {punch.employeeName?.slice(0, 2).toUpperCase() || '—'}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-gray-900">{punch.employeeName}</div>
+                        <div className="text-xs text-gray-500">{pIn.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                      </div>
+                      {isActive
+                        ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-600 text-white">Active</span>
+                        : dur != null && <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-gray-200 text-gray-700">{Math.floor(dur / 60)}h {dur % 60}m</span>
+                      }
                     </div>
-                    <div>
-                      <div className="font-medium text-gray-900">{punch.employeeName}</div>
-                      <div className="text-xs text-gray-500">{pIn.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
-                    </div>
-                  </div>
-                  <div className="flex-1 min-w-0 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                    <div>
-                      <div className="text-xs text-gray-500">Punch in</div>
-                      <div className="font-medium tabular-nums">{pIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Punch out</div>
-                      <div className="font-medium tabular-nums">{pOut ? pOut.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Duration</div>
-                      <div className="font-medium">{dur != null ? `${Math.floor(dur / 60)}h ${dur % 60}m` : '—'}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Breaks</div>
-                      <div className="font-medium">
-                        {punch.breaks && punch.breaks.length
-                          ? punch.breaks.map((b: any, i: number) => (
-                              <span key={i} className="block text-xs">
-                                {new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                {b.end ? ` – ${new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ' (active)'}
-                              </span>
-                            ))
-                          : '—'}
+                    <div className="grid grid-cols-3 gap-4 pl-12">
+                      <div>
+                        <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-0.5">In</div>
+                        <div className="font-semibold tabular-nums text-emerald-700">{pIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-0.5">Out</div>
+                        <div className={`font-semibold tabular-nums ${pOut ? 'text-red-600' : 'text-amber-500'}`}>{pOut ? pOut.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-0.5">Breaks</div>
+                        <div className="text-sm font-medium text-gray-700">
+                          {punch.breaks?.length
+                            ? punch.breaks.map((b: any, i: number) => (
+                                <span key={i} className="block text-xs leading-relaxed">
+                                  {new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  {b.end ? ` – ${new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ' (active)'}
+                                </span>
+                              ))
+                            : <span className="text-gray-400">—</span>}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-          {punches.length === 0 && (
-            <div className="p-8 text-center text-gray-500 rounded-xl border border-dashed border-gray-200">No punch records yet</div>
+                );
+              })}
+            </div>
           )}
           {punches.length > 4 && (
             <button onClick={() => setShowAllPunchesModal(true)} className="w-full py-3 rounded-xl border-2 border-dashed border-blue-200 text-[#2563EB] font-semibold hover:bg-blue-50 transition-colors flex items-center justify-center gap-2">
@@ -656,7 +936,7 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
           )}
         </div>
 
-        {/* Financial Analytics with Date Range */}
+        {/* Financial Analytics */}
         <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-6">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
@@ -664,13 +944,14 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
               <p className="text-xs text-gray-500 mt-1">Daily and weekly performance overview</p>
             </div>
             <div className="flex items-center gap-2">
-              <Input type="date" value={finStartDate} onChange={e => setFinStartDate(e.target.value)} className="rounded-xl h-9 w-auto text-sm" />
-              <span className="text-sm text-gray-500">to</span>
-              <Input type="date" value={finEndDate} onChange={e => setFinEndDate(e.target.value)} className="rounded-xl h-9 w-auto text-sm" />
-              <Button size="sm" className="rounded-xl bg-[#2563EB] hover:bg-[#1d4ed8]" onClick={handleFetchFinancialRange}>Apply</Button>
+              <Input type="date" value={finSelectedDate} onChange={e => setFinSelectedDate(e.target.value)} className="rounded-xl h-9 w-auto text-sm" />
+              <Button size="sm" className="rounded-xl bg-[#2563EB] hover:bg-[#1d4ed8]" onClick={handleFetchFinancialDate} disabled={finLoading}>
+                {finLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Look up'}
+              </Button>
             </div>
           </div>
 
+          {/* Today's summary (always visible) */}
           <div className="grid md:grid-cols-2 gap-4">
             <div className="p-6 rounded-xl bg-gradient-to-br from-purple-50 to-purple-100/50 border border-purple-100">
               <div className="flex items-center gap-3 mb-3">
@@ -715,6 +996,58 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Date lookup results */}
+          {finDateReport && finSelectedDate !== todayIso && (
+            <div className="border-t border-gray-200 pt-6 space-y-4">
+              <h3 className="font-semibold flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-[#2563EB]" />
+                Report for {formatLongDate(new Date(finSelectedDate + 'T00:00:00'))}
+              </h3>
+              <div className="grid md:grid-cols-3 gap-4">
+                <div className="p-5 rounded-xl border border-green-200 bg-green-50">
+                  <div className="text-sm text-gray-600 mb-2">Wages</div>
+                  <div className="text-2xl font-bold text-green-700">${(finDateReport.totalWages ?? 0).toFixed(2)}</div>
+                  <div className="text-sm text-gray-600 mt-1">{(finDateReport.totalHours ?? 0).toFixed(1)} hours</div>
+                </div>
+                <div className="p-5 rounded-xl border border-purple-200 bg-purple-50">
+                  <div className="text-sm text-gray-600 mb-2">Tips</div>
+                  <div className="text-2xl font-bold text-purple-700">${(finDateReport.totalTips ?? 0).toFixed(2)}</div>
+                  <div className="text-sm text-gray-600 mt-1">Proportional split</div>
+                </div>
+                <div className="p-5 rounded-xl border border-blue-200 bg-blue-50">
+                  <div className="text-sm text-gray-600 mb-2">Combined</div>
+                  <div className="text-2xl font-bold text-blue-700">${((finDateReport.totalWages ?? 0) + (finDateReport.totalTips ?? 0)).toFixed(2)}</div>
+                  <div className="text-sm text-gray-600 mt-1">Total payout</div>
+                </div>
+              </div>
+              {finDateReport.employees?.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium text-gray-700">Employee breakdown</h4>
+                  {finDateReport.employees.map((emp: any, idx: number) => (
+                    <div key={idx} className="p-3 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-medium text-xs">
+                          {emp.name?.split(' ').map((n: string) => n[0]).join('') || '?'}
+                        </div>
+                        <div>
+                          <div className="font-medium text-sm">{emp.name}</div>
+                          <div className="text-xs text-gray-500">{emp.hours}h @ ${emp.rate}/hr</div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-sm">${(emp.wages + emp.tips).toFixed(2)}</div>
+                        <div className="text-xs text-gray-400">${emp.wages.toFixed(2)} + ${emp.tips.toFixed(2)} tips</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(!finDateReport.employees || finDateReport.employees.length === 0) && (
+                <div className="p-4 rounded-xl border border-dashed border-gray-200 text-sm text-gray-500 text-center">No employee records found for this date.</div>
+              )}
             </div>
           )}
         </div>
@@ -763,44 +1096,80 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
       {showAllPunchesModal && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 overflow-y-auto py-8">
           <div className="w-full max-w-4xl mx-4 bg-white rounded-2xl shadow-2xl">
+            {/* Sticky header */}
             <div className="sticky top-0 z-10 px-6 py-5 border-b border-gray-200 bg-white rounded-t-2xl flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-bold text-gray-900">All Time Punches</h2>
                 <p className="text-sm text-gray-500 mt-1">{punches.length} records — latest first</p>
               </div>
-              <button onClick={() => setShowAllPunchesModal(false)} className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors">✕</button>
+              <div className="flex items-center gap-3">
+                <Button variant="outline" size="sm" className="rounded-xl" onClick={handleExportPunchesCSV}>
+                  <Download className="w-4 h-4 mr-1.5" /> Print CSV
+                </Button>
+                <button onClick={() => setShowAllPunchesModal(false)} className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors text-lg">✕</button>
+              </div>
             </div>
+
+            {/* Records */}
             <div className="p-6 space-y-3">
-              {[...punches].sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime()).map((punch) => {
-                const pIn = new Date(punch.clockIn);
-                const pOut = punch.clockOut ? new Date(punch.clockOut) : null;
-                const dur = pOut ? Math.round((pOut.getTime() - pIn.getTime()) / 60000) : null;
-                const isActive = !pOut;
-                return (
-                  <div key={punch._id} className={`rounded-xl border p-4 ${isActive ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-gray-50 hover:bg-white'} transition-colors`}>
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold ${isActive ? 'bg-emerald-600' : 'bg-blue-600'}`}>
-                        {punch.employeeName?.slice(0, 2).toUpperCase() || '—'}
+              {punches.length === 0 ? (
+                <div className="py-16 text-center rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50">
+                  <Clock className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                  <p className="font-medium text-gray-600">No punch records yet</p>
+                </div>
+              ) : (
+                [...punches]
+                  .sort((a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime())
+                  .map((punch) => {
+                    const pIn = new Date(punch.clockIn);
+                    const pOut = punch.clockOut ? new Date(punch.clockOut) : null;
+                    const dur = pOut ? Math.round((pOut.getTime() - pIn.getTime()) / 60000) : null;
+                    const isActive = !pOut;
+                    return (
+                      <div key={punch._id} className={`rounded-xl border p-4 transition-colors ${isActive ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-gray-50/50 hover:bg-white'}`}>
+                        {/* Row 1: Avatar + name + date + status badge */}
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0 ${isActive ? 'bg-emerald-600' : 'bg-blue-600'}`}>
+                            {punch.employeeName?.slice(0, 2).toUpperCase() || '—'}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-gray-900">{punch.employeeName}</div>
+                            <div className="text-xs text-gray-500">{pIn.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                          </div>
+                          {isActive
+                            ? <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-600 text-white">Active</span>
+                            : dur != null && <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">{Math.floor(dur / 60)}h {dur % 60}m</span>
+                          }
+                        </div>
+
+                        {/* Row 2: Times grid */}
+                        <div className="grid grid-cols-3 gap-4 pl-[52px]">
+                          <div>
+                            <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-0.5">Punch In</div>
+                            <div className="font-semibold tabular-nums text-emerald-700">{pIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-0.5">Punch Out</div>
+                            <div className={`font-semibold tabular-nums ${pOut ? 'text-red-600' : 'text-amber-500'}`}>{pOut ? pOut.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-0.5">Breaks</div>
+                            <div className="text-sm font-medium text-gray-700">
+                              {punch.breaks?.length
+                                ? punch.breaks.map((b: any, i: number) => (
+                                    <span key={i} className="block text-xs leading-relaxed">
+                                      {new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      {b.end ? ` – ${new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ' (active)'}
+                                    </span>
+                                  ))
+                                : <span className="text-gray-400">None</span>}
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-gray-900">{punch.employeeName}</div>
-                        <div className="text-xs text-gray-500">{pIn.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</div>
-                      </div>
-                      {isActive && <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-600 text-white">Active</span>}
-                      {dur != null && <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">{Math.floor(dur / 60)}h {dur % 60}m</span>}
-                    </div>
-                    <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm pl-[52px]">
-                      <div><span className="text-gray-500">In: </span><span className="font-semibold tabular-nums text-emerald-700">{pIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></div>
-                      <div><span className="text-gray-500">Out: </span><span className={`font-semibold tabular-nums ${pOut ? 'text-red-600' : 'text-amber-600'}`}>{pOut ? pOut.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</span></div>
-                      {punch.breaks && punch.breaks.length > 0 && (
-                        <div><span className="text-gray-500">Breaks: </span>{punch.breaks.map((b: any, i: number) => (
-                          <span key={i} className="font-medium text-amber-700">{i > 0 && ', '}{new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}{b.end ? `–${new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ' (active)'}</span>
-                        ))}</div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })
+              )}
             </div>
           </div>
         </div>
@@ -836,109 +1205,114 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
         </DialogContent>
       </Dialog>
 
-      {/* Employee Management Modal */}
-      <Dialog open={showEmployeeManagement} onOpenChange={setShowEmployeeManagement}>
-        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-2xl">Employee Management</DialogTitle>
-            <DialogDescription>Manage roles, promote/demote, add or remove employees</DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-wrap gap-3 mt-2">
-            <div className="flex-1 min-w-[200px] relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <Input placeholder="Search by name, email, department..." value={employeeSearch} onChange={e => setEmployeeSearch(e.target.value)} className="pl-10 rounded-xl h-10" />
+      {/* Employee Management Modal (full-screen overlay) */}
+      {showEmployeeManagement && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 overflow-y-auto py-8">
+          <div className="w-full max-w-5xl mx-4 bg-white rounded-2xl shadow-2xl">
+            <div className="sticky top-0 z-10 px-6 py-4 border-b border-gray-200 bg-white rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Employee Management</h2>
+                <p className="text-sm text-gray-500">Manage roles, promote/demote, add or remove employees</p>
+              </div>
+              <button onClick={() => setShowEmployeeManagement(false)} className="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors">✕</button>
             </div>
-            <Button className="rounded-full bg-[#2563EB] hover:bg-[#1d4ed8]" onClick={() => setShowAddEmployeeModal(true)}>
-              <Plus className="w-4 h-4 mr-2" /> Add Employee
-            </Button>
-            {selectedIds.size > 0 && (
-              <Button variant="outline" className="rounded-full" onClick={() => setShowBulkActions(true)}>
-                Bulk Actions ({selectedIds.size})
+
+            <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap gap-3">
+              <div className="flex-1 min-w-[200px] relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <Input placeholder="Search by name, email, department..." value={employeeSearch} onChange={e => setEmployeeSearch(e.target.value)} className="pl-10 rounded-xl h-10" />
+              </div>
+              <Button className="rounded-full bg-[#2563EB] hover:bg-[#1d4ed8]" onClick={() => setShowAddEmployeeModal(true)}>
+                <Plus className="w-4 h-4 mr-2" /> Add Employee
               </Button>
-            )}
-          </div>
-
-          <div className="space-y-6 mt-4">
-            {/* Managers */}
-            <div>
-              <h3 className="font-medium mb-3 flex items-center gap-2">
-                <Crown className="w-4 h-4 text-amber-600" />
-                Managers ({groupedByLevel.Manager.length})
-              </h3>
-              <div className="space-y-2">
-                {groupedByLevel.Manager.filter(e => filteredEmployees.includes(e)).map(emp => (
-                  <div key={getId(emp)} className="p-4 rounded-xl border-2 border-amber-200 bg-amber-50 flex items-center justify-between group">
-                    <div className="flex items-center gap-3">
-                      <input type="checkbox" checked={selectedIds.has(getId(emp))} onChange={() => toggleBulkSelect(getId(emp))} className="w-4 h-4 rounded" />
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-white font-semibold">
-                        {emp.name.split(' ').map(n => n[0]).join('')}
-                      </div>
-                      <div>
-                        <div className="font-medium">{emp.name}</div>
-                        <div className="text-sm text-gray-600">{emp.role} &bull; {emp.department}</div>
-                        <div className="text-xs text-gray-400">{emp.email}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="secondary">${emp.hourlyRate}/hr</Badge>
-                      <Button size="sm" variant="outline" className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleViewAttendance(emp)}>
-                        <History className="w-4 h-4 mr-1" /> History
-                      </Button>
-                      <Button size="sm" variant="outline" className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setSelectedEmployee(emp); setShowPromoteModal(true); }}>
-                        <ArrowDownCircle className="w-4 h-4 mr-1" /> Demote
-                      </Button>
-                      <Button size="sm" variant="ghost" className="opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 hover:text-red-600" onClick={() => { setSelectedEmployee(emp); setShowRemoveModal(true); }}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-                {groupedByLevel.Manager.filter(e => filteredEmployees.includes(e)).length === 0 && (
-                  <div className="p-4 rounded-xl border border-dashed border-gray-200 text-sm text-gray-500">No managers match your search.</div>
-                )}
-              </div>
+              {selectedIds.size > 0 && (
+                <Button variant="outline" className="rounded-full" onClick={() => setShowBulkActions(true)}>
+                  Bulk Actions ({selectedIds.size})
+                </Button>
+              )}
             </div>
 
-            {/* Employees */}
-            <div>
-              <h3 className="font-medium mb-3 flex items-center gap-2">
-                <Users className="w-4 h-4 text-blue-600" />
-                Employees ({groupedByLevel.Employee.length})
-              </h3>
-              <div className="space-y-2">
-                {groupedByLevel.Employee.filter(e => filteredEmployees.includes(e)).map(emp => (
-                  <div key={getId(emp)} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-blue-200 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <input type="checkbox" checked={selectedIds.has(getId(emp))} onChange={() => toggleBulkSelect(getId(emp))} className="w-4 h-4 rounded" />
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-semibold">
-                        {emp.name.split(' ').map(n => n[0]).join('')}
+            <div className="p-6 space-y-6">
+              {/* Managers */}
+              <div>
+                <h3 className="font-medium mb-3 flex items-center gap-2">
+                  <Crown className="w-4 h-4 text-amber-600" />
+                  Managers ({groupedByLevel.Manager.length})
+                </h3>
+                <div className="space-y-2">
+                  {groupedByLevel.Manager.filter(e => filteredEmployees.includes(e)).map(emp => (
+                    <div key={getId(emp)} className="p-4 rounded-xl border-2 border-amber-200 bg-amber-50 flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" checked={selectedIds.has(getId(emp))} onChange={() => toggleBulkSelect(getId(emp))} className="w-4 h-4 rounded" />
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-white font-semibold">
+                          {emp.name.split(' ').map(n => n[0]).join('')}
+                        </div>
+                        <div>
+                          <div className="font-medium">{emp.name}</div>
+                          <div className="text-sm text-gray-600">{emp.role} &bull; {emp.department}</div>
+                          <div className="text-xs text-gray-400">{emp.email}</div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="font-medium">{emp.name}</div>
-                        <div className="text-sm text-gray-600">{emp.role} &bull; {emp.department}</div>
-                        <div className="text-xs text-gray-400">{emp.email}</div>
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                        <Badge variant="secondary">${emp.hourlyRate}/hr</Badge>
+                        <Button size="sm" variant="outline" onClick={() => handleViewAttendance(emp)}>
+                          <Clock className="w-3.5 h-3.5 mr-1" /> History
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => { setSelectedEmployee(emp); setShowPromoteModal(true); }}>
+                          <ArrowDownCircle className="w-3.5 h-3.5 mr-1" /> Demote
+                        </Button>
+                        <Button size="sm" variant="ghost" className="hover:bg-red-50 hover:text-red-600" onClick={() => { setSelectedEmployee(emp); setShowRemoveModal(true); }}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="secondary">${emp.hourlyRate}/hr</Badge>
-                      <Button size="sm" variant="outline" className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleViewAttendance(emp)}>
-                        <History className="w-4 h-4 mr-1" /> History
-                      </Button>
-                      <Button size="sm" variant="outline" className="opacity-0 group-hover:opacity-100 transition-opacity border-green-200 text-green-600 hover:bg-green-50" onClick={() => { setSelectedEmployee(emp); setShowPromoteModal(true); }}>
-                        <ArrowUpCircle className="w-4 h-4 mr-1" /> Promote
-                      </Button>
-                      <Button size="sm" variant="ghost" className="opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 hover:text-red-600" onClick={() => { setSelectedEmployee(emp); setShowRemoveModal(true); }}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                  ))}
+                  {groupedByLevel.Manager.filter(e => filteredEmployees.includes(e)).length === 0 && (
+                    <div className="p-4 rounded-xl border border-dashed border-gray-200 text-sm text-gray-500">No managers match your search.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Employees */}
+              <div>
+                <h3 className="font-medium mb-3 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-blue-600" />
+                  Employees ({groupedByLevel.Employee.length})
+                </h3>
+                <div className="space-y-2">
+                  {groupedByLevel.Employee.filter(e => filteredEmployees.includes(e)).map(emp => (
+                    <div key={getId(emp)} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-blue-200 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" checked={selectedIds.has(getId(emp))} onChange={() => toggleBulkSelect(getId(emp))} className="w-4 h-4 rounded" />
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-semibold">
+                          {emp.name.split(' ').map(n => n[0]).join('')}
+                        </div>
+                        <div>
+                          <div className="font-medium">{emp.name}</div>
+                          <div className="text-sm text-gray-600">{emp.role} &bull; {emp.department}</div>
+                          <div className="text-xs text-gray-400">{emp.email}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                        <Badge variant="secondary">${emp.hourlyRate}/hr</Badge>
+                        <Button size="sm" variant="outline" onClick={() => handleViewAttendance(emp)}>
+                          <Clock className="w-3.5 h-3.5 mr-1" /> History
+                        </Button>
+                        <Button size="sm" variant="outline" className="border-green-200 text-green-600 hover:bg-green-50" onClick={() => { setSelectedEmployee(emp); setShowPromoteModal(true); }}>
+                          <ArrowUpCircle className="w-3.5 h-3.5 mr-1" /> Promote
+                        </Button>
+                        <Button size="sm" variant="ghost" className="hover:bg-red-50 hover:text-red-600" onClick={() => { setSelectedEmployee(emp); setShowRemoveModal(true); }}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
 
       {/* Bulk Actions Modal */}
       <Dialog open={showBulkActions} onOpenChange={setShowBulkActions}>
@@ -1208,7 +1582,18 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
             <DialogTitle className="text-2xl">System Settings</DialogTitle>
             <DialogDescription>Restaurant system configuration</DialogDescription>
           </DialogHeader>
-          {settings && (
+          {settingsLoading && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+              <span className="ml-3 text-gray-500">Loading settings...</span>
+            </div>
+          )}
+          {settingsError && !settingsLoading && (
+            <div className="mt-4 p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" /> {settingsError}
+            </div>
+          )}
+          {settings && !settingsLoading && (
             <div className="space-y-4 mt-4">
               <div className="space-y-2"><Label>Business Name</Label><Input disabled={!settingsEditing} value={settingsForm.businessName || ''} onChange={e => setSettingsForm({ ...settingsForm, businessName: e.target.value })} className="rounded-xl" /></div>
               <div className="grid grid-cols-2 gap-4">
@@ -1244,31 +1629,38 @@ export function AdminDashboard({ onNavigate, onLogout, user }: Props) {
         </DialogContent>
       </Dialog>
 
-      {/* Audit Log Modal */}
-      <Dialog open={showAuditLogModal} onOpenChange={setShowAuditLogModal}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+      {/* Shifts Today Modal */}
+      <Dialog open={showShiftsModal} onOpenChange={setShowShiftsModal}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-2xl">Activity Log</DialogTitle>
-            <DialogDescription>Recent actions across the system</DialogDescription>
+            <DialogTitle className="text-2xl">Shifts Today</DialogTitle>
+            <DialogDescription>All scheduled shifts for {todayLabel}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 mt-4">
-            {auditLog.length === 0 && <div className="p-6 text-center text-gray-500 rounded-xl border border-dashed border-gray-200">No activity recorded yet.</div>}
-            {auditLog.map(entry => (
-              <div key={entry._id} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-start gap-3">
-                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                  <Activity className="w-5 h-5 text-blue-600" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-sm">{entry.actor}</span>
-                    <Badge variant="secondary" className="text-xs">{entry.action.replace(/_/g, ' ')}</Badge>
-                    {entry.target && <span className="text-sm text-gray-600">&rarr; {entry.target}</span>}
+            {todaysShifts.length === 0 ? (
+              <div className="p-4 rounded-xl border border-dashed border-gray-200 text-sm text-gray-500">No shifts scheduled for today.</div>
+            ) : (
+              todaysShifts.map((shift, idx) => {
+                const dur = calculateShiftDurationHours(shift.startTime, shift.endTime);
+                return (
+                  <div key={shift._id || idx} className="p-4 rounded-xl border border-blue-100 bg-blue-50/50 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold text-xs">
+                        {shift.employee?.split(' ').map(n => n[0]).join('') || '?'}
+                      </div>
+                      <div>
+                        <div className="font-medium">{shift.employee}</div>
+                        <div className="text-sm text-gray-600">{shift.role}</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-medium tabular-nums">{shift.startTime} – {shift.endTime}</div>
+                      <div className="text-sm text-gray-500">{dur.toFixed(1)} hours</div>
+                    </div>
                   </div>
-                  {entry.details && <div className="text-sm text-gray-500 mt-1">{entry.details}</div>}
-                  <div className="text-xs text-gray-400 mt-1">{new Date(entry.createdAt).toLocaleString()}</div>
-                </div>
-              </div>
-            ))}
+                );
+              })
+            )}
           </div>
         </DialogContent>
       </Dialog>

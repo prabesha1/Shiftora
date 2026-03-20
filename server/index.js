@@ -83,6 +83,8 @@ async function ensureIndexes(database) {
     await database.collection('requests').createIndex({ status: 1 });
     await database.collection('audit_log').createIndex({ createdAt: -1 });
     await database.collection('settings').createIndex({ key: 1 }, { unique: true });
+    await database.collection('user_notifications').createIndex({ userId: 1, createdAt: -1 });
+    await database.collection('user_notifications').createIndex({ targetRole: 1 });
   } catch {
     // indexes may already exist
   }
@@ -401,9 +403,21 @@ app.post('/api/shifts', authMiddleware, requireRole('admin', 'manager'), async (
     endTime,
     date,
     durationHours,
+    published: false,
     createdAt: new Date(),
   };
   const result = await database.collection('shifts').insertOne(doc);
+
+  if (employeeId) {
+    await database.collection('user_notifications').insertOne({
+      userId: employeeId,
+      type: 'shift_assigned',
+      message: `New shift assigned: ${date} ${startTime}–${endTime} as ${role}`,
+      read: false,
+      createdAt: new Date(),
+    });
+  }
+
   res.status(201).json({ _id: result.insertedId, ...doc });
 });
 
@@ -412,6 +426,40 @@ app.delete('/api/shifts/:id', authMiddleware, requireRole('admin', 'manager'), a
   const result = await database.collection('shifts').deleteOne({ _id: new ObjectId(req.params.id) });
   if (!result.deletedCount) return res.status(404).json({ message: 'Shift not found' });
   res.json({ deleted: true });
+});
+
+app.post('/api/shifts/publish', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
+  const { start, end } = req.body || {};
+  if (!start || !end) return res.status(400).json({ message: 'start and end dates required' });
+  const database = await getDb();
+  const filter = { date: { $gte: start, $lte: end } };
+  const shifts = await database.collection('shifts').find(filter).toArray();
+  if (shifts.length === 0) return res.status(400).json({ message: 'No shifts found in this date range' });
+
+  await database.collection('shifts').updateMany(filter, { $set: { published: true, publishedAt: new Date() } });
+
+  const employeeIds = [...new Set(shifts.map(s => s.employeeId).filter(Boolean))];
+  const notifDocs = employeeIds.map(empId => ({
+    userId: empId,
+    type: 'schedule_published',
+    message: `The schedule for ${start} to ${end} has been published. Check your shifts!`,
+    read: false,
+    createdAt: new Date(),
+  }));
+  notifDocs.push({
+    targetRole: 'admin',
+    type: 'schedule_published',
+    message: `${req.user.name} published the schedule for ${start} to ${end} (${shifts.length} shifts)`,
+    read: false,
+    createdAt: new Date(),
+  });
+  if (notifDocs.length > 0) {
+    await database.collection('user_notifications').insertMany(notifDocs);
+  }
+
+  await logAction(database, { actor: req.user.name, action: 'publish_schedule', target: `${start} to ${end}`, details: `${shifts.length} shifts published` });
+
+  res.json({ published: true, count: shifts.length });
 });
 
 // ── TIPS ───────────────────────────────────────────────────
@@ -506,6 +554,67 @@ app.post('/api/punches/break-end', authMiddleware, async (req, res) => {
   res.json({ updated: true });
 });
 
+app.patch('/api/punches/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
+  const { clockIn, clockOut } = req.body || {};
+  const database = await getDb();
+  const punch = await database.collection('punches').findOne({ _id: new ObjectId(req.params.id) });
+  if (!punch) return res.status(404).json({ message: 'Punch not found' });
+  const updates = {};
+  if (clockIn) updates.clockIn = new Date(clockIn);
+  if (clockOut) updates.clockOut = new Date(clockOut);
+  if (clockOut === null) updates.clockOut = null;
+  if (Object.keys(updates).length === 0) return res.status(400).json({ message: 'Nothing to update' });
+  await database.collection('punches').updateOne({ _id: new ObjectId(req.params.id) }, { $set: updates });
+  await logAction(database, { actor: req.user.name, action: 'edit_punch', target: punch.employeeName, details: `Edited punch times for ${punch.employeeName}` });
+
+  await database.collection('user_notifications').insertOne({
+    userId: punch.employeeId,
+    type: 'punch_edited',
+    message: `Your punch record on ${new Date(punch.clockIn).toLocaleDateString()} was edited by ${req.user.name}`,
+    read: false,
+    createdAt: new Date(),
+  });
+  res.json({ updated: true });
+});
+
+// ── USER NOTIFICATIONS ────────────────────────────────────
+
+app.get('/api/user-notifications', authMiddleware, async (req, res) => {
+  const database = await getDb();
+  const userId = req.user.id;
+  const employee = await database.collection('employees').findOne({ userId: new ObjectId(userId) });
+  const ids = [userId];
+  if (employee) ids.push(employee._id.toString());
+  const allRoleNotifs = await database.collection('user_notifications')
+    .find({ $or: [{ userId: { $in: ids } }, { targetRole: req.user.role }] })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .toArray();
+  res.json(allRoleNotifs);
+});
+
+app.patch('/api/user-notifications/:id/read', authMiddleware, async (req, res) => {
+  const database = await getDb();
+  await database.collection('user_notifications').updateOne(
+    { _id: new ObjectId(req.params.id) },
+    { $set: { read: true } }
+  );
+  res.json({ updated: true });
+});
+
+app.post('/api/user-notifications/read-all', authMiddleware, async (req, res) => {
+  const database = await getDb();
+  const userId = req.user.id;
+  const employee = await database.collection('employees').findOne({ userId: new ObjectId(userId) });
+  const ids = [userId];
+  if (employee) ids.push(employee._id.toString());
+  await database.collection('user_notifications').updateMany(
+    { $or: [{ userId: { $in: ids } }, { targetRole: req.user.role }] },
+    { $set: { read: true } }
+  );
+  res.json({ updated: true });
+});
+
 // ── REQUESTS (swap/leave) ──────────────────────────────────
 
 app.get('/api/requests', authMiddleware, async (req, res) => {
@@ -538,6 +647,25 @@ app.post('/api/requests', authMiddleware, async (req, res) => {
     createdAt: new Date(),
   };
   const result = await database.collection('requests').insertOne(doc);
+
+  const label = type === 'swap' ? 'Swap' : 'Leave';
+  await database.collection('user_notifications').insertMany([
+    {
+      targetRole: 'manager',
+      type: 'new_request',
+      message: `${employee} submitted a ${label.toLowerCase()} request for "${shift}" — ${reason}`,
+      read: false,
+      createdAt: new Date(),
+    },
+    {
+      targetRole: 'admin',
+      type: 'new_request',
+      message: `${employee} submitted a ${label.toLowerCase()} request for "${shift}"`,
+      read: false,
+      createdAt: new Date(),
+    },
+  ]);
+
   res.status(201).json({ _id: result.insertedId, ...doc });
 });
 
@@ -548,11 +676,22 @@ app.patch('/api/requests/:id', authMiddleware, requireRole('admin', 'manager'), 
   }
   try {
     const database = await getDb();
+    const requestDoc = await database.collection('requests').findOne({ _id: new ObjectId(req.params.id) });
     const update = { status };
     if (managerNote !== undefined) update.managerNote = managerNote;
     await database
       .collection('requests')
       .updateOne({ _id: new ObjectId(req.params.id) }, { $set: update });
+
+    if (requestDoc && requestDoc.employeeId) {
+      await database.collection('user_notifications').insertOne({
+        userId: requestDoc.employeeId,
+        type: `request_${status}`,
+        message: `Your ${requestDoc.type} request for "${requestDoc.shift}" has been ${status}${managerNote ? `: ${managerNote}` : ''}`,
+        read: false,
+        createdAt: new Date(),
+      });
+    }
 
     await logAction(database, { actor: req.user.name, action: `request_${status}`, target: req.params.id, details: managerNote || '' });
 
@@ -635,7 +774,7 @@ app.get('/api/notifications', authMiddleware, async (req, res) => {
       notifications.push({
         type: 'overtime',
         severity: 'warning',
-        message: `${p.employeeName} has been clocked in for ${Math.floor(hoursActive)}h — possible overtime`,
+        message: `${p.employeeName} has been punched in for ${Math.floor(hoursActive)}h — possible overtime`,
         timestamp: p.clockIn,
       });
     }
