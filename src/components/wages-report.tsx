@@ -180,10 +180,6 @@ export function WagesReport({ onNavigate, onLogout, user }: Props) {
                 />
               </div>
               
-              <Button className="rounded-full h-10 bg-[#2563EB] hover:bg-[#1d4ed8]">
-                Update
-              </Button>
-
               <div className="flex gap-2">
                 <Button variant="outline" className="rounded-full h-10" onClick={handleExportPDF}>
                   <Download className="w-4 h-4 mr-2" />

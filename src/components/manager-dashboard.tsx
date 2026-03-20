@@ -35,6 +35,11 @@ type Employee = {
   status?: string;
   hourlyRate?: number;
   email?: string;
+  department?: string;
+  phone?: string;
+  dob?: string;
+  address?: string;
+  level?: string;
 };
 
 type Punch = {
@@ -115,8 +120,17 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
 
   const [publishLoading, setPublishLoading] = useState(false);
 
-  const onHolidayEmployees: Employee[] = [];
-  
+  const [showEditEmployeeModal, setShowEditEmployeeModal] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [editEmployeeForm, setEditEmployeeForm] = useState({
+    name: '', email: '', phone: '', dob: '', address: '', role: 'Server', department: 'Front of House', hourlyRate: 16, level: 'Employee'
+  });
+  const [editEmployeeSaving, setEditEmployeeSaving] = useState(false);
+  const [editEmployeeMessage, setEditEmployeeMessage] = useState<string | null>(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [resetPasswordMessage, setResetPasswordMessage] = useState<string | null>(null);
+  const [resetPasswordSaving, setResetPasswordSaving] = useState(false);
+
   // Create shift form state
   const [newShift, setNewShift] = useState({
     employee: '',
@@ -168,7 +182,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     setTimeout(() => setConfirmationMessage(null), 3000);
   };
 
-  const handleCreateShift = () => {
+  const handleCreateShift = async () => {
     const { employee, role, startTime, endTime, date } = newShift;
     const duration = calculateShiftDurationHours(startTime, endTime);
 
@@ -179,11 +193,16 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
     }
 
     const emp = employees.find(e => e.name === employee);
-    api.createShift({ ...newShift, employeeId: emp?._id, durationHours: duration }, user.token)
-      .then((created: any) => setShifts([...shifts, created]))
-      .catch((err) => setConfirmationMessage(err.message));
-    setNewShift({ employee: '', role: '', startTime: '', endTime: '', date: '' });
-    setShowCreateShiftModal(false);
+    try {
+      const created = await api.createShift({ ...newShift, employeeId: emp?._id, durationHours: duration }, user.token);
+      setShifts(prev => [...prev, created as Shift]);
+      setNewShift({ employee: '', role: '', startTime: '', endTime: '', date: '' });
+      setShowCreateShiftModal(false);
+      setConfirmationMessage('Shift created successfully.');
+    } catch (err: any) {
+      setConfirmationMessage(err.message || 'Failed to create shift.');
+    }
+    setTimeout(() => setConfirmationMessage(null), 3000);
   };
 
   const handleDaySchedule = (day: string, date: string, weekLabel: string) => {
@@ -262,6 +281,71 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
       setConfirmationMessage(err.message || 'Failed to add employee.');
     }
     setTimeout(() => setConfirmationMessage(null), 3000);
+  };
+
+  const openEditEmployee = (emp: Employee) => {
+    setEditingEmployee(emp);
+    setEditEmployeeForm({
+      name: emp.name || '',
+      email: emp.email || '',
+      phone: emp.phone || '',
+      dob: emp.dob || '',
+      address: emp.address || '',
+      role: emp.role || 'Server',
+      department: emp.department || 'Front of House',
+      hourlyRate: emp.hourlyRate ?? 16,
+      level: emp.level || 'Employee',
+    });
+    setEditEmployeeMessage(null);
+    setResetPasswordValue('');
+    setResetPasswordMessage(null);
+    setShowEditEmployeeModal(true);
+  };
+
+  const handleSaveEditEmployee = async () => {
+    if (!editingEmployee) return;
+    setEditEmployeeSaving(true);
+    setEditEmployeeMessage(null);
+    try {
+      await api.updateEmployee(editingEmployee._id, {
+        name: editEmployeeForm.name,
+        email: editEmployeeForm.email,
+        phone: editEmployeeForm.phone,
+        dob: editEmployeeForm.dob,
+        address: editEmployeeForm.address,
+        role: editEmployeeForm.role,
+        department: editEmployeeForm.department,
+        hourlyRate: Number(editEmployeeForm.hourlyRate),
+        level: editEmployeeForm.level,
+      }, user.token);
+      setEmployees(prev => prev.map(e =>
+        e._id === editingEmployee._id
+          ? { ...e, name: editEmployeeForm.name, email: editEmployeeForm.email, phone: editEmployeeForm.phone, dob: editEmployeeForm.dob, address: editEmployeeForm.address, role: editEmployeeForm.role, department: editEmployeeForm.department, hourlyRate: Number(editEmployeeForm.hourlyRate), level: editEmployeeForm.level }
+          : e
+      ));
+      setEditEmployeeMessage('Employee updated successfully.');
+    } catch (err: any) {
+      setEditEmployeeMessage(err.message || 'Failed to update employee.');
+    }
+    setEditEmployeeSaving(false);
+  };
+
+  const handleResetEmployeePassword = async () => {
+    if (!editingEmployee) return;
+    if (!resetPasswordValue || resetPasswordValue.length < 6) {
+      setResetPasswordMessage('Password must be at least 6 characters.');
+      return;
+    }
+    setResetPasswordSaving(true);
+    setResetPasswordMessage(null);
+    try {
+      await api.resetEmployeePassword(editingEmployee._id, resetPasswordValue, user.token);
+      setResetPasswordMessage('Password has been reset. Employee will be notified.');
+      setResetPasswordValue('');
+    } catch (err: any) {
+      setResetPasswordMessage(err.message || 'Failed to reset password.');
+    }
+    setResetPasswordSaving(false);
   };
 
   const week1StartIso = toISODate(week1Start);
@@ -623,8 +707,8 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           <div className="p-6 bg-white space-y-4">
             {/* Status info row */}
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm" style={{ backgroundColor: managerPunchStatus === 'working' ? '#059669' : managerPunchStatus === 'break' ? '#d97706' : '#ea580c' }}>
-                {managerPunchStatus === 'working' ? <Clock className="w-7 h-7 text-white" /> : managerPunchStatus === 'break' ? <Coffee className="w-7 h-7 text-white" /> : <LogIn className="w-7 h-7 text-white" />}
+              <div style={{ width: 56, height: 56, minWidth: 56, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', backgroundColor: managerPunchStatus === 'working' ? '#059669' : managerPunchStatus === 'break' ? '#d97706' : '#ea580c' }}>
+                {managerPunchStatus === 'working' ? <Clock style={{ width: 28, height: 28, color: '#fff' }} /> : managerPunchStatus === 'break' ? <Coffee style={{ width: 28, height: 28, color: '#fff' }} /> : <LogIn style={{ width: 28, height: 28, color: '#fff' }} />}
               </div>
               <div>
                 <div className="text-lg font-bold text-gray-900">
@@ -1391,23 +1475,27 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
               </h3>
               <div className="space-y-2">
                 {employees.map((employee, index) => (
-                  <div key={employee._id || index} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-red-200 transition-colors">
+                  <div key={employee._id || index} className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between group hover:border-blue-300 transition-colors cursor-pointer" onClick={() => openEditEmployee(employee)}>
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-semibold text-sm">
                         {employee.name.split(' ').map(n => n[0]).join('')}
                       </div>
                       <div>
                         <div className="font-medium">{employee.name}</div>
-                        <div className="text-sm text-gray-600">{employee.role}</div>
+                        <div className="text-sm text-gray-600">{employee.role}{employee.department ? ` · ${employee.department}` : ''}</div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      {employee.hourlyRate != null && (
+                        <span className="text-sm text-gray-500 font-medium">${employee.hourlyRate}/hr</span>
+                      )}
                       <Badge className="bg-[#22C55E] hover:bg-[#22C55E]">Active</Badge>
+                      <Pencil className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                       <Button
                         size="sm"
                         variant="ghost"
                         className="opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 hover:text-red-600"
-                        onClick={() => handleRemoveEmployee(employee._id, employee.name)}
+                        onClick={(e) => { e.stopPropagation(); handleRemoveEmployee(employee._id, employee.name); }}
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -1417,31 +1505,6 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
               </div>
             </div>
 
-            <div className="border-t border-gray-200 pt-6">
-              <h3 className="font-medium mb-3 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-amber-500" />
-                On Holiday ({onHolidayEmployees.length})
-              </h3>
-              <div className="space-y-2">
-                {onHolidayEmployees.map((employee, index) => (
-                  <div key={index} className="p-4 rounded-xl border border-amber-200 bg-amber-50 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-white">
-                        {employee.name.split(' ').map(n => n[0]).join('')}
-                      </div>
-                      <div>
-                        <div className="font-medium">{employee.name}</div>
-                        <div className="text-sm text-gray-600">{employee.role}</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <Badge className="bg-amber-500 hover:bg-amber-500 mb-1">Holiday</Badge>
-                      <div className="text-xs text-gray-600">{employee.holidayDates}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -1540,6 +1603,151 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Employee Modal */}
+      {showEditEmployeeModal && editingEmployee && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={() => setShowEditEmployeeModal(false)} />
+          <div style={{ position: 'relative', backgroundColor: '#fff', borderRadius: 20, width: '100%', maxWidth: 600, maxHeight: '90vh', overflow: 'auto', padding: 0, boxShadow: '0 25px 50px rgba(0,0,0,0.15)' }} onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ padding: '28px 32px 20px', borderBottom: '1px solid #e5e7eb' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 18 }}>
+                    {editingEmployee.name.split(' ').map(n => n[0]).join('')}
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: 22, fontWeight: 700, color: '#111827', margin: 0 }}>Edit Employee</h2>
+                    <p style={{ fontSize: 14, color: '#6b7280', margin: 0 }}>{editingEmployee.name} · {editingEmployee.role}</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowEditEmployeeModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6 }}>
+                  <X style={{ width: 20, height: 20, color: '#9ca3af' }} />
+                </button>
+              </div>
+            </div>
+
+            <div style={{ padding: '24px 32px 32px' }}>
+              {editEmployeeMessage && (
+                <div style={{ padding: '10px 14px', borderRadius: 10, marginBottom: 16, fontSize: 14, backgroundColor: editEmployeeMessage.includes('success') ? '#f0fdf4' : '#fef2f2', color: editEmployeeMessage.includes('success') ? '#166534' : '#991b1b', border: `1px solid ${editEmployeeMessage.includes('success') ? '#bbf7d0' : '#fecaca'}` }}>
+                  {editEmployeeMessage}
+                </div>
+              )}
+
+              {/* Personal Info */}
+              <div style={{ marginBottom: 24 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: '#374151', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Users style={{ width: 16, height: 16, color: '#6b7280' }} />
+                  Personal Information
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Full Name</Label>
+                    <Input value={editEmployeeForm.name} onChange={(e) => setEditEmployeeForm(f => ({ ...f, name: e.target.value }))} className="rounded-xl h-10 mt-1" />
+                  </div>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Email</Label>
+                    <Input type="email" value={editEmployeeForm.email} onChange={(e) => setEditEmployeeForm(f => ({ ...f, email: e.target.value }))} className="rounded-xl h-10 mt-1" />
+                  </div>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Phone</Label>
+                    <Input value={editEmployeeForm.phone} onChange={(e) => setEditEmployeeForm(f => ({ ...f, phone: e.target.value }))} className="rounded-xl h-10 mt-1" placeholder="(123) 456-7890" />
+                  </div>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Date of Birth</Label>
+                    <Input type="date" value={editEmployeeForm.dob} onChange={(e) => setEditEmployeeForm(f => ({ ...f, dob: e.target.value }))} className="rounded-xl h-10 mt-1" />
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Address</Label>
+                    <Input value={editEmployeeForm.address} onChange={(e) => setEditEmployeeForm(f => ({ ...f, address: e.target.value }))} className="rounded-xl h-10 mt-1" placeholder="123 Main St, City" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Position & Pay */}
+              <div style={{ marginBottom: 24 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: '#374151', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Building2 style={{ width: 16, height: 16, color: '#6b7280' }} />
+                  Position & Pay
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Role</Label>
+                    <Select value={editEmployeeForm.role} onValueChange={(v) => setEditEmployeeForm(f => ({ ...f, role: v }))}>
+                      <SelectTrigger className="rounded-xl h-10 mt-1"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {['Server', 'Bartender', 'Chef', 'Manager', 'Host', 'Dishwasher', 'Line Cook'].map((r) => (
+                          <SelectItem key={r} value={r}>{r}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Department</Label>
+                    <Select value={editEmployeeForm.department} onValueChange={(v) => setEditEmployeeForm(f => ({ ...f, department: v }))}>
+                      <SelectTrigger className="rounded-xl h-10 mt-1"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {['Front of House', 'Kitchen', 'Bar', 'Management'].map((d) => (
+                          <SelectItem key={d} value={d}>{d}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Position Level</Label>
+                    <Select value={editEmployeeForm.level} onValueChange={(v) => setEditEmployeeForm(f => ({ ...f, level: v }))}>
+                      <SelectTrigger className="rounded-xl h-10 mt-1"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Employee">Employee</SelectItem>
+                        <SelectItem value="Manager">Manager</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>Hourly Rate ($)</Label>
+                    <Input type="number" min="0" step="0.50" value={editEmployeeForm.hourlyRate} onChange={(e) => setEditEmployeeForm(f => ({ ...f, hourlyRate: Number(e.target.value) }))} className="rounded-xl h-10 mt-1" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Save button */}
+              <div style={{ display: 'flex', gap: 12, marginBottom: 28 }}>
+                <Button variant="outline" className="flex-1 rounded-full h-11" onClick={() => setShowEditEmployeeModal(false)}>Cancel</Button>
+                <Button className="flex-1 rounded-full h-11" style={{ backgroundColor: '#2563EB' }} onClick={handleSaveEditEmployee} disabled={editEmployeeSaving}>
+                  {editEmployeeSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                  Save Changes
+                </Button>
+              </div>
+
+              {/* Password Reset Section */}
+              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 24 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: '#374151', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Shield style={{ width: 16, height: 16, color: '#6b7280' }} />
+                  Reset Password
+                </h3>
+                <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                  Set a new password for this employee. They will be notified and must use the new password to sign in.
+                </p>
+                {resetPasswordMessage && (
+                  <div style={{ padding: '10px 14px', borderRadius: 10, marginBottom: 12, fontSize: 14, backgroundColor: resetPasswordMessage.includes('reset') ? '#f0fdf4' : '#fef2f2', color: resetPasswordMessage.includes('reset') ? '#166534' : '#991b1b', border: `1px solid ${resetPasswordMessage.includes('reset') ? '#bbf7d0' : '#fecaca'}` }}>
+                    {resetPasswordMessage}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+                  <div style={{ flex: 1 }}>
+                    <Label style={{ fontSize: 13, color: '#6b7280' }}>New Password (min 6 chars)</Label>
+                    <Input type="password" value={resetPasswordValue} onChange={(e) => setResetPasswordValue(e.target.value)} className="rounded-xl h-10 mt-1" placeholder="Enter new password" />
+                  </div>
+                  <Button className="rounded-full h-10 px-6" style={{ backgroundColor: '#dc2626' }} onClick={handleResetEmployeePassword} disabled={resetPasswordSaving}>
+                    {resetPasswordSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Reset
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Swap/Leave Requests Modal */}
       <Dialog open={showSwapRequestsModal} onOpenChange={setShowSwapRequestsModal}>

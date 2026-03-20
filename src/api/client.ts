@@ -112,6 +112,8 @@ export const api = {
     request(`/api/employees/${id}`, 'PATCH', data, token),
   deleteEmployee: (id: string, token?: string) =>
     request(`/api/employees/${id}`, 'DELETE', undefined, token),
+  resetEmployeePassword: (id: string, newPassword: string, token?: string) =>
+    request(`/api/employees/${id}/reset-password`, 'POST', { newPassword }, token),
 
   getShifts: (params: { employeeId?: string; start?: string; end?: string } = {}, token?: string) => {
     const query = new URLSearchParams(params as any).toString();

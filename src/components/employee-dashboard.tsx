@@ -1,4 +1,4 @@
-import { Calendar, DollarSign, Clock, ChevronRight, LogIn, LogOut, Coffee, Loader2, Settings, Key, Bell, CheckCheck } from 'lucide-react';
+import { Calendar, DollarSign, Clock, ChevronRight, LogIn, LogOut, Coffee, Loader2, Settings, Key, Bell, CheckCheck, Briefcase, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Label } from './ui/label';
 import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { api } from '../api/client';
 import { DateTimePanel } from './datetime-panel';
 import { calculateShiftDurationHours, formatHours, toISODate } from '../utils/time';
@@ -46,6 +46,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [changePasswordForm, setChangePasswordForm] = useState({ current: '', new: '', confirm: '' });
   const [changePasswordMessage, setChangePasswordMessage] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [liveTime, setLiveTime] = useState(() => new Date());
   const [userNotifications, setUserNotifications] = useState<any[]>([]);
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
@@ -100,6 +101,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   const refreshData = async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const employeesList = await api.getEmployees(user.token);
       const profile =
         (employeesList as any[]).find((e: any) => e.userId?.toString && e.userId.toString() === user.id) ||
@@ -144,6 +146,8 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
         }
         setPunchGatePassed(true);
       }
+    } catch (err: any) {
+      setLoadError(err.message || 'Failed to load dashboard data. Is the server running?');
     } finally {
       setLoading(false);
       setInitialized(true);
@@ -232,6 +236,16 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
 
   const shift = getCurrentShift();
 
+  const [showAssignedShiftsModal, setShowAssignedShiftsModal] = useState(false);
+
+  const assignedShiftStats = useMemo(() => {
+    const upcoming = shifts.filter(s => s.date >= todayIso);
+    const totalHours = upcoming.reduce((sum, s) => sum + calculateShiftDurationHours(s.startTime, s.endTime), 0);
+    const rate = employeeProfile?.hourlyRate ?? weeklySummary?.hourlyRate ?? 16;
+    const estimatedPayout = totalHours * rate;
+    return { count: upcoming.length, totalHours, rate, estimatedPayout, upcoming };
+  }, [shifts, todayIso, employeeProfile, weeklySummary]);
+
   if (!initialized) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
@@ -243,51 +257,68 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="text-center space-y-4 max-w-md mx-auto p-8">
+          <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto">
+            <span className="text-red-500 text-2xl">!</span>
+          </div>
+          <h2 className="text-xl font-semibold text-gray-900">Something went wrong</h2>
+          <p className="text-gray-600 text-sm">{loadError}</p>
+          <Button onClick={refreshData} className="rounded-full bg-[#2563EB] hover:bg-[#1d4ed8]">
+            Try Again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   if (punchStatus === 'not-punched-in' && !punchGatePassed) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 p-6">
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'linear-gradient(165deg, #fff7ed 0%, #ffedd5 35%, #fed7aa 70%, #fdba74 100%)' }}>
         <div className="w-full max-w-md space-y-6">
           <div className="text-center">
             <span className="text-2xl tracking-tight">
-              <span className="font-semibold text-[#2563EB]">Shift</span>
+              <span style={{ fontWeight: 700, color: '#ea580c' }}>Shift</span>
               <span className="text-black">ora</span>
             </span>
           </div>
 
-          <div className="bg-white rounded-3xl shadow-xl shadow-gray-200/50 border border-gray-100 p-8 space-y-6">
+          <div style={{ backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 24, boxShadow: '0 20px 40px rgba(234,88,12,0.1)', border: '1px solid rgba(251,146,60,0.25)', padding: 32 }} className="space-y-6">
             <div className="text-center space-y-3">
-              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center mx-auto shadow-lg shadow-orange-200">
+              <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg, #fb923c, #ea580c)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto', boxShadow: '0 8px 24px rgba(234,88,12,0.3)' }}>
                 <LogIn className="w-10 h-10 text-white" />
               </div>
               <h1 className="text-3xl">Welcome, {user.name}!</h1>
               <p className="text-gray-600">Ready to start your shift?</p>
             </div>
 
-            <div className="p-5 rounded-2xl border-2 border-blue-200 bg-blue-50">
-              <div className="flex items-center gap-2 text-blue-700 mb-2">
+            <div style={{ padding: 20, borderRadius: 16, border: '2px solid #fb923c', backgroundColor: '#fff7ed' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#9a3412', marginBottom: 8 }}>
                 <Calendar className="w-5 h-5" />
                 <span className="font-semibold">Today&apos;s shift</span>
               </div>
               <div className="text-xl font-bold text-gray-900">{shift.day}</div>
               <div className="text-gray-600 mb-2">{shift.time}</div>
               <div className="flex items-center justify-between">
-                <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
+                <span style={{ display: 'inline-flex', padding: '4px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: '#fff', backgroundColor: '#ea580c' }}>{shift.role}</span>
                 <span className="text-sm text-gray-600">
                   {shift.hours > 0 ? `${shift.hours} hrs scheduled` : 'No shift scheduled'}
                 </span>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-orange-50 border border-orange-200">
+            <div style={{ padding: 16, borderRadius: 12, backgroundColor: '#fff7ed', border: '1px solid #fdba74' }}>
               <div className="flex items-start gap-3">
-                <div className="w-6 h-6 rounded-full bg-orange-500 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <div style={{ width: 24, height: 24, borderRadius: '50%', backgroundColor: '#ea580c', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
                   <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
                 <div className="space-y-1">
-                  <div className="font-medium text-orange-900">Before you begin</div>
-                  <ul className="text-sm text-orange-800 space-y-0.5 list-disc list-inside">
+                  <div style={{ fontWeight: 500, color: '#7c2d12' }}>Before you begin</div>
+                  <ul style={{ fontSize: 14, color: '#9a3412' }} className="space-y-0.5 list-disc list-inside">
                     <li>Your time will be tracked from punch in</li>
                     <li>Remember to take your scheduled break</li>
                     <li>Manager will be notified when you punch in</li>
@@ -297,10 +328,10 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             </div>
 
             <button
-              className="w-full rounded-2xl h-14 inline-flex items-center justify-center gap-2 text-base font-bold text-white shadow-lg shadow-orange-200 transition-all"
-              style={{ background: 'linear-gradient(to right, #f97316, #ea580c)' }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'linear-gradient(to right, #ea580c, #c2410c)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'linear-gradient(to right, #f97316, #ea580c)')}
+              className="w-full rounded-2xl h-14 inline-flex items-center justify-center gap-2 text-base font-bold text-white transition-all"
+              style={{ background: 'linear-gradient(135deg, #fb923c, #ea580c)', boxShadow: '0 8px 20px rgba(234,88,12,0.3)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'linear-gradient(135deg, #ea580c, #9a3412)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'linear-gradient(135deg, #fb923c, #ea580c)')}
               onClick={handlePunchIn}
             >
               <LogIn className="w-5 h-5" />
@@ -320,17 +351,17 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
   }
 
   return (
-    <div className="min-h-screen">
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(165deg, #fff7ed 0%, #ffedd5 35%, #fed7aa 70%, #fdba74 100%)' }}>
       {/* Navbar */}
-      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-200">
+      <nav style={{ position: 'sticky', top: 0, zIndex: 50, backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', background: 'linear-gradient(135deg, rgba(234,88,12,0.08) 0%, rgba(251,146,60,0.1) 100%)', borderBottom: '1px solid rgba(251,146,60,0.25)' }}>
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <span className="text-xl tracking-tight">
-                <span className="font-semibold text-[#2563EB]">Shift</span><span className="text-black">ora</span>
+                <span style={{ fontWeight: 700, color: '#ea580c' }}>Shift</span><span className="text-black">ora</span>
               </span>
             </div>
-            <Badge variant="secondary" className="rounded-full">Employee</Badge>
+            <span style={{ display: 'inline-flex', padding: '3px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, backgroundColor: '#fff7ed', color: '#ea580c', border: '1px solid #fdba74' }}>Employee</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -420,7 +451,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             </Button>
             <button
               onClick={() => setShowProfileModal(true)}
-              className="w-9 h-9 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white hover:ring-2 hover:ring-green-300 cursor-pointer"
+              style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #fb923c, #ea580c)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(234,88,12,0.3)' }}
             >
               {user.name ? user.name[0].toUpperCase() : 'E'}
             </button>
@@ -439,15 +470,15 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
         {/* Header */}
         <div className="space-y-2">
-          <h1 className="text-4xl">Welcome, {user.name}</h1>
-          <p className="text-gray-600">View your schedule, request swaps, and track your earnings.</p>
+          <h1 style={{ fontSize: '2.25rem', fontWeight: 800, color: '#7c2d12' }}>Welcome, {user.name}</h1>
+          <p style={{ color: '#9a3412' }}>View your schedule, request swaps, and track your earnings.</p>
         </div>
 
         {/* Time Clock - Punch In/Out */}
-        <div className="rounded-2xl border-2 shadow-lg overflow-hidden" style={{ borderColor: punchStatus === 'punched-in' ? '#6ee7b7' : punchStatus === 'on-break' ? '#fbbf24' : '#94a3b8', backgroundColor: punchStatus === 'punched-in' ? '#ecfdf5' : punchStatus === 'on-break' ? '#fffbeb' : '#f1f5f9' }}>
+        <div style={{ borderRadius: 20, border: '2px solid', overflow: 'hidden', boxShadow: '0 10px 30px rgba(234,88,12,0.1)', borderColor: punchStatus === 'punched-in' ? '#6ee7b7' : punchStatus === 'on-break' ? '#fbbf24' : '#fdba74', backgroundColor: punchStatus === 'punched-in' ? '#ecfdf5' : punchStatus === 'on-break' ? '#fffbeb' : '#fff7ed' }}>
           {/* Status header */}
-          <div className="px-6 py-4 flex items-center justify-between" style={{ backgroundColor: punchStatus === 'punched-in' ? '#a7f3d0' : punchStatus === 'on-break' ? '#fde68a' : '#cbd5e1', borderBottom: punchStatus === 'punched-in' ? '2px solid #34d399' : punchStatus === 'on-break' ? '2px solid #f59e0b' : '2px solid #94a3b8' }}>
-            <h2 className="text-xl font-bold text-slate-900">Time Clock</h2>
+          <div className="px-6 py-4 flex items-center justify-between" style={{ background: punchStatus === 'punched-in' ? 'linear-gradient(135deg, #a7f3d0, #6ee7b7)' : punchStatus === 'on-break' ? 'linear-gradient(135deg, #fde68a, #fbbf24)' : 'linear-gradient(135deg, #ffedd5, #fdba74)', borderBottom: punchStatus === 'punched-in' ? '2px solid #34d399' : punchStatus === 'on-break' ? '2px solid #f59e0b' : '2px solid #fb923c' }}>
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: punchStatus === 'punched-in' ? '#065f46' : punchStatus === 'on-break' ? '#78350f' : '#9a3412' }}>Time Clock</h2>
             {punchStatus === 'punched-in' && (
               <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium text-white" style={{ backgroundColor: '#059669' }}>
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
@@ -483,16 +514,16 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
               </div>
 
               {/* Shift card */}
-              <div className="flex-1 min-w-0 rounded-2xl border-2 p-5 shadow-sm" style={{ borderColor: '#60a5fa', backgroundColor: '#bfdbfe' }}>
-                <div className="flex items-center gap-2 mb-2" style={{ color: '#1e3a5f' }}>
-                  <Calendar className="w-5 h-5" />
-                  <span className="font-bold">{shift.hours > 0 ? "Today's shift" : 'Next shift'}</span>
+              <div style={{ flex: 1, minWidth: 0, borderRadius: 16, border: '2px solid #fb923c', padding: 20, boxShadow: '0 4px 12px rgba(234,88,12,0.1)', background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, color: '#9a3412' }}>
+                  <Calendar style={{ width: 18, height: 18 }} />
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{shift.hours > 0 ? "Today's shift" : 'Next shift'}</span>
                 </div>
-                <div className="text-2xl font-bold text-slate-900 mb-1">{shift.day}</div>
-                <div className="text-lg font-semibold text-slate-800 mb-2">{shift.time}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: '#7c2d12', marginBottom: 4 }}>{shift.day}</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: '#9a3412', marginBottom: 10 }}>{shift.time}</div>
                 <div className="flex items-center justify-between">
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium text-white" style={{ backgroundColor: '#2563eb' }}>{shift.role}</span>
-                  <span className="text-sm font-medium text-slate-700">
+                  <span style={{ display: 'inline-flex', alignItems: 'center', padding: '4px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: '#fff', backgroundColor: '#ea580c', lineHeight: '1.4' }}>{shift.role}</span>
+                  <span style={{ fontSize: 14, fontWeight: 500, color: '#9a3412' }}>
                     {shift.hours > 0 ? `${shift.hours} hrs scheduled` : 'No shift scheduled'}
                   </span>
                 </div>
@@ -527,8 +558,8 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             {punchStatus === 'not-punched-in' && (
               <button
                 className="w-full rounded-2xl h-16 inline-flex items-center justify-center gap-3 text-lg font-bold text-white border-2 shadow-lg transition-all"
-                style={{ backgroundColor: '#ea580c', borderColor: '#c2410c' }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#c2410c')}
+                style={{ backgroundColor: '#ea580c', borderColor: '#9a3412' }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#9a3412')}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ea580c')}
                 onClick={handlePunchIn}
               >
@@ -578,13 +609,48 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
         </div>
 
+        {/* Assigned Shifts Panel */}
+        <div
+          onClick={() => setShowAssignedShiftsModal(true)}
+          style={{ background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 50%, #fed7aa 100%)', borderRadius: 20, padding: '24px 28px', border: '2px solid #fb923c', cursor: 'pointer', transition: 'all 0.2s', boxShadow: '0 4px 16px rgba(234,88,12,0.1)' }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = '#ea580c'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(234,88,12,0.2)'; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = '#fb923c'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(234,88,12,0.1)'; }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <div style={{ width: 52, height: 52, minWidth: 52, borderRadius: 16, background: 'linear-gradient(135deg, #fb923c, #ea580c)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(234,88,12,0.35)' }}>
+                <Briefcase style={{ width: 26, height: 26, color: '#fff' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: '#9a3412' }}>Assigned Shifts</div>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#7c2d12', lineHeight: 1.1 }}>
+                  {assignedShiftStats.count}
+                  <span style={{ fontSize: 16, fontWeight: 500, color: '#9a3412', marginLeft: 8 }}>upcoming</span>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: '#9a3412' }}>Est. Hours</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: '#7c2d12' }}>{assignedShiftStats.totalHours.toFixed(1)}</div>
+              </div>
+              <div style={{ width: 1, height: 40, backgroundColor: '#fb923c' }} />
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: '#9a3412' }}>Est. Payout</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: '#16a34a' }}>${assignedShiftStats.estimatedPayout.toFixed(2)}</div>
+              </div>
+              <ChevronRight style={{ width: 22, height: 22, color: '#fb923c' }} />
+            </div>
+          </div>
+        </div>
+
         {/* Two Column Layout */}
         <div className="grid lg:grid-cols-2 gap-6">
           {/* This week's shifts */}
-          <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl">This week</h2>
-              <button className="text-sm text-[#2563EB] hover:text-[#1d4ed8]" onClick={() => setShowAllShiftsModal(true)}>View all</button>
+          <div style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 20, padding: 24, boxShadow: '0 8px 24px rgba(234,88,12,0.06)', border: '1px solid rgba(251,146,60,0.2)' }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#7c2d12' }}>This week</h2>
+              <button style={{ fontSize: 14, color: '#ea580c', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => setShowAllShiftsModal(true)}>View all</button>
             </div>
 
             <div className="space-y-3">
@@ -592,26 +658,26 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                 const duration = calculateShiftDurationHours(shift.startTime, shift.endTime);
                 const dateLabel = new Date(shift.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' });
                 return (
-                  <div key={shift._id || idx} className={`p-4 rounded-xl border ${idx === 0 ? 'border-2 border-blue-200 bg-blue-50/50' : 'border-gray-200'}`}>
+                  <div key={shift._id || idx} style={{ padding: 16, borderRadius: 14, border: idx === 0 ? '2px solid #fb923c' : '1px solid #fed7aa', backgroundColor: idx === 0 ? '#fff7ed' : '#fff' }}>
                     <div className="flex items-start justify-between mb-2">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
-                          <Calendar className="w-4 h-4 text-blue-600" />
+                          <Calendar style={{ width: 16, height: 16, color: '#ea580c' }} />
                           <span className="font-medium">{dateLabel}</span>
                         </div>
                         <div className="text-gray-600">{shift.startTime} – {shift.endTime}</div>
                       </div>
-                      <Badge className="bg-blue-600 hover:bg-blue-600">{shift.role}</Badge>
+                      <span style={{ display: 'inline-flex', padding: '3px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600, color: '#fff', backgroundColor: '#ea580c' }}>{shift.role}</span>
                     </div>
                     <div className="flex items-center gap-2 text-sm text-gray-600">
-                      <Clock className="w-4 h-4" />
+                      <Clock style={{ width: 16, height: 16 }} />
                       <span>{formatHours(duration)} hours</span>
                     </div>
                   </div>
                 );
               })}
               {shifts.filter(s => s.date >= todayIso).length === 0 && (
-                <div className="p-4 rounded-xl border border-dashed border-gray-300 text-sm text-gray-600">
+                <div style={{ padding: 16, borderRadius: 14, border: '2px dashed #fdba74', fontSize: 14, color: '#9a3412' }}>
                   No scheduled shifts yet.
                 </div>
               )}
@@ -619,7 +685,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
 
           {/* Request shift swap */}
-          <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-4">
+          <div style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 20, padding: 24, boxShadow: '0 8px 24px rgba(234,88,12,0.06)', border: '1px solid rgba(251,146,60,0.2)' }} className="space-y-4">
             {!swapRequestSent ? (
               <>
                 <div>
@@ -748,23 +814,23 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
         </div>
 
         {/* Wages & tips summary */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg shadow-gray-200/50 border border-gray-100 space-y-6">
+        <div style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 20, padding: 24, boxShadow: '0 8px 24px rgba(234,88,12,0.06)', border: '1px solid rgba(251,146,60,0.2)' }} className="space-y-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl">Wages & tips (this week)</h2>
-            <Badge variant="secondary" className="rounded-full">
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: '#7c2d12' }}>Wages & tips (this week)</h2>
+            <span style={{ display: 'inline-flex', padding: '4px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600, backgroundColor: '#fff7ed', color: '#ea580c', border: '1px solid #fdba74' }}>
               {weeklySummary ? `${weeklySummary.weekStart} – ${weeklySummary.weekEnd}` : 'Loading…'}
-            </Badge>
+            </span>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
-            <div className="p-6 rounded-xl bg-gradient-to-br from-purple-50 to-purple-100/50 border border-purple-100">
+            <div style={{ padding: 24, borderRadius: 16, background: 'linear-gradient(135deg, #fff7ed, #ffedd5)', border: '1px solid #fdba74' }}>
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-200 flex items-center justify-center">
-                  <DollarSign className="w-5 h-5 text-purple-700" />
+                <div style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: '#fed7aa', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <DollarSign style={{ width: 20, height: 20, color: '#9a3412' }} />
                 </div>
                 <div className="text-sm text-gray-600">Wages earned</div>
               </div>
-              <div className="text-3xl mb-1">
+              <div style={{ fontSize: '1.875rem', fontWeight: 700, color: '#7c2d12', marginBottom: 4 }}>
                 {weeklySummary ? `$${weeklySummary.wages.toFixed(2)}` : '$0.00'}
               </div>
               <div className="text-sm text-gray-600 mb-3">
@@ -772,9 +838,9 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                   ? `From ${weeklySummary.hoursWorked.toFixed(2)} hours @ $${weeklySummary.hourlyRate}/hr`
                   : 'No hours logged yet'}
               </div>
-              <div className="flex items-center gap-2 text-xs text-purple-700 bg-purple-100 rounded-lg px-2 py-1 w-fit">
-                <span>Paid on next payday</span>
-              </div>
+              <span style={{ display: 'inline-flex', padding: '3px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600, color: '#9a3412', backgroundColor: '#fed7aa' }}>
+                Paid on next payday
+              </span>
             </div>
 
             <div className="p-6 rounded-xl bg-gradient-to-br from-green-50 to-green-100/50 border border-green-100">
@@ -824,9 +890,10 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
               </div>
               <div className="w-full bg-gray-100 rounded-full h-2">
                 <div
-                  className="bg-blue-600 h-2 rounded-full transition-all"
+                  className="h-2 rounded-full transition-all"
                   style={{
                     width: `${Math.min(100, weeklySummary ? (weeklySummary.hoursWorked / 40) * 100 : 0)}%`,
+                    background: 'linear-gradient(90deg, #fb923c, #ea580c)',
                   }}
                 />
               </div>
@@ -890,7 +957,7 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
             </div>
           </div>
 
-          <button className="flex items-center gap-2 text-[#2563EB] hover:text-[#1d4ed8] transition-colors" onClick={() => setShowPaymentHistoryModal(true)}>
+          <button className="flex items-center gap-2 transition-colors" style={{ color: '#ea580c' }} onClick={() => setShowPaymentHistoryModal(true)}>
             View full payment history
             <ChevronRight className="w-4 h-4" />
           </button>
@@ -1032,6 +1099,93 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Assigned Shifts Modal */}
+      {showAssignedShiftsModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={() => setShowAssignedShiftsModal(false)} />
+          <div style={{ position: 'relative', backgroundColor: '#fff', borderRadius: 20, width: '100%', maxWidth: 560, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px rgba(0,0,0,0.15)' }} onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ padding: '24px 28px 20px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Briefcase style={{ width: 22, height: 22, color: '#fff' }} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111827', margin: 0 }}>Assigned Shifts</h2>
+                  <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>{assignedShiftStats.count} upcoming shift{assignedShiftStats.count !== 1 ? 's' : ''}</p>
+                </div>
+              </div>
+              <button onClick={() => setShowAssignedShiftsModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6 }}>
+                <X style={{ width: 20, height: 20, color: '#9ca3af' }} />
+              </button>
+            </div>
+
+            {/* Payout Summary */}
+            <div style={{ padding: '20px 28px', background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)', borderBottom: '1px solid #bbf7d0' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, textAlign: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>Total Hours</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: '#1e3a5f' }}>{assignedShiftStats.totalHours.toFixed(1)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>Rate</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: '#1e3a5f' }}>${assignedShiftStats.rate}/hr</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>Est. Payout</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: '#16a34a' }}>${assignedShiftStats.estimatedPayout.toFixed(2)}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Shift list */}
+            <div style={{ padding: '20px 28px 12px' }}>
+              {assignedShiftStats.upcoming.length === 0 ? (
+                <div style={{ padding: '40px 0', textAlign: 'center' }}>
+                  <Briefcase style={{ width: 40, height: 40, color: '#d1d5db', margin: '0 auto 12px' }} />
+                  <p style={{ color: '#9ca3af', fontSize: 15 }}>No upcoming shifts assigned</p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {assignedShiftStats.upcoming.map((s: any, idx: number) => {
+                    const duration = calculateShiftDurationHours(s.startTime, s.endTime);
+                    const dayLabel = new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                    const shiftPay = duration * assignedShiftStats.rate;
+                    return (
+                      <div key={s._id || idx} style={{ padding: '14px 16px', borderRadius: 14, border: '1px solid #e5e7eb', backgroundColor: idx === 0 ? '#eff6ff' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', transition: 'background-color 0.15s' }}
+                        onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                        onMouseLeave={e => e.currentTarget.style.backgroundColor = idx === 0 ? '#eff6ff' : '#fff'}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                          <div style={{ width: 40, height: 40, minWidth: 40, borderRadius: 12, backgroundColor: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Calendar style={{ width: 18, height: 18, color: '#2563eb' }} />
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 14, color: '#111827' }}>{dayLabel}</div>
+                            <div style={{ fontSize: 13, color: '#6b7280' }}>{s.startTime} – {s.endTime} · {duration.toFixed(1)} hrs</div>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', padding: '3px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600, color: '#fff', backgroundColor: '#2563eb', marginBottom: 4 }}>{s.role || 'Server'}</span>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: '#16a34a' }}>${shiftPay.toFixed(2)}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Disclaimer footer */}
+            <div style={{ padding: '16px 28px 24px', borderTop: '1px solid #f3f4f6' }}>
+              <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', fontStyle: 'italic', margin: 0, lineHeight: 1.5 }}>
+                This is an estimation without tips &amp; without tax deduction
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* All Shifts Modal */}
       <Dialog open={showAllShiftsModal} onOpenChange={setShowAllShiftsModal}>
@@ -1187,8 +1341,8 @@ export function EmployeeDashboard({ onNavigate, onLogout, user }: Props) {
                 {profileMessage}
               </div>
             )}
-            <div className="flex items-center gap-4 p-4 rounded-xl bg-green-50 border border-green-100">
-              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white text-2xl">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 16, borderRadius: 14, backgroundColor: '#fff7ed', border: '1px solid #fdba74' }}>
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'linear-gradient(135deg, #fb923c, #ea580c)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 24, fontWeight: 700 }}>
                 {(profile.name || user.name)?.[0]?.toUpperCase() || 'E'}
               </div>
               <div>

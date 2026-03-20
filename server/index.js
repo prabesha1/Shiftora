@@ -302,6 +302,26 @@ app.patch('/api/employees/:id', authMiddleware, requireRole('admin', 'manager'),
   res.json({ updated: true });
 });
 
+app.post('/api/employees/:id/reset-password', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
+  const { newPassword } = req.body || {};
+  if (!newPassword || newPassword.length < 6) return res.status(400).json({ message: 'New password must be at least 6 characters' });
+  const database = await getDb();
+  const emp = await database.collection('employees').findOne({ _id: new ObjectId(req.params.id) });
+  if (!emp) return res.status(404).json({ message: 'Employee not found' });
+  if (!emp.userId) return res.status(400).json({ message: 'Employee has no linked user account' });
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await database.collection('users').updateOne({ _id: emp.userId }, { $set: { passwordHash } });
+  await logAction(database, { actor: req.user.name, action: 'reset_employee_password', target: emp.name || req.params.id, details: 'Password reset by manager' });
+  await database.collection('user_notifications').insertOne({
+    userId: emp.userId.toString(),
+    type: 'password_reset',
+    message: `Your password has been reset by ${req.user.name}. Please log in with your new password.`,
+    read: false,
+    createdAt: new Date(),
+  });
+  res.json({ success: true });
+});
+
 // ── PROFILE ────────────────────────────────────────────────
 
 app.get('/api/profile', authMiddleware, async (req, res) => {
