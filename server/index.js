@@ -6,7 +6,8 @@ const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-dotenv.config({ path: path.resolve(__dirname, '.env') });
+const envPath = path.resolve(__dirname, '.env');
+try { dotenv.config({ path: envPath }); } catch { /* .env may not exist in serverless */ }
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -53,21 +54,28 @@ const calculateDurationHours = (startTime, endTime) => {
 
 async function getDb() {
   if (db) return db;
-  client = new MongoClient(MONGO_URI, {
-    serverSelectionTimeoutMS: 10000,
-    connectTimeoutMS: 10000,
-  });
-  await client.connect();
-  db = client.db();
-  console.log('Connected to MongoDB');
+  try {
+    client = new MongoClient(MONGO_URI, {
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
+    });
+    await client.connect();
+    db = client.db();
+    console.log('Connected to MongoDB');
 
-  await ensureIndexes(db);
+    await ensureIndexes(db);
 
-  if (!seeded) {
-    await seed(db);
-    seeded = true;
+    if (!seeded) {
+      await seed(db);
+      seeded = true;
+    }
+    return db;
+  } catch (err) {
+    console.error('MongoDB connection failed:', err.message);
+    db = null;
+    client = null;
+    throw new Error('Database connection failed: ' + err.message);
   }
-  return db;
 }
 
 async function ensureIndexes(database) {
