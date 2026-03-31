@@ -1116,24 +1116,26 @@ async function seed(database) {
 
 // ── START ──────────────────────────────────────────────────
 
-async function start() {
-  try {
-    await getDb();
-    app.listen(PORT, () => {
-      console.log(`Shiftora API listening on http://localhost:${PORT}`);
-    });
-  } catch (err) {
-    console.error('Failed to start server:', err.message);
-    process.exit(1);
-  }
+if (require.main === module) {
+  (async function start() {
+    try {
+      await getDb();
+      app.listen(PORT, () => {
+        console.log(`Shiftora API listening on http://localhost:${PORT}`);
+      });
+    } catch (err) {
+      console.error('Failed to start server:', err.message);
+      process.exit(1);
+    }
+  })();
+
+  process.on('SIGINT', async () => {
+    if (client) {
+      await client.close();
+      console.log('MongoDB connection closed.');
+    }
+    process.exit(0);
+  });
 }
 
-start();
-
-process.on('SIGINT', async () => {
-  if (client) {
-    await client.close();
-    console.log('MongoDB connection closed.');
-  }
-  process.exit(0);
-});
+module.exports = app;
