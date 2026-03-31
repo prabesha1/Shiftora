@@ -514,8 +514,21 @@ app.post('/api/tips', authMiddleware, requireRole('admin', 'manager'), async (re
 
 // ── PUNCHES ────────────────────────────────────────────────
 
-const findLatestPunch = async (database, employeeId) =>
-  database.collection('punches').findOne({ employeeId, clockOut: null }, { sort: { clockIn: -1 } });
+async function findLatestPunch(database, employeeId) {
+  if (!employeeId) return null;
+  const s = String(employeeId);
+  const variants = [s];
+  if (ObjectId.isValid(s)) {
+    const oid = new ObjectId(s);
+    variants.push(oid);
+    const emp = await database.collection('employees').findOne({ $or: [{ _id: oid }, { userId: oid }] });
+    if (emp) {
+      variants.push(emp._id.toString(), emp._id);
+      if (emp.userId) variants.push(emp.userId.toString(), emp.userId);
+    }
+  }
+  return database.collection('punches').findOne({ employeeId: { $in: variants }, clockOut: null }, { sort: { clockIn: -1 } });
+}
 
 app.get('/api/punches', authMiddleware, async (req, res) => {
   const database = await getDb();
@@ -528,12 +541,20 @@ app.get('/api/punches', authMiddleware, async (req, res) => {
 app.post('/api/punches/clock-in', authMiddleware, async (req, res) => {
   const { employeeId, time } = req.body || {};
   if (!employeeId) return res.status(400).json({ message: 'employeeId required' });
+  if (!ObjectId.isValid(String(employeeId))) return res.status(400).json({ message: 'Invalid employeeId' });
   const database = await getDb();
-  const employee = await database.collection('employees').findOne({ _id: new ObjectId(employeeId) });
+  const oid = new ObjectId(String(employeeId));
+  let employee = await database.collection('employees').findOne({ _id: oid });
+  let storedEmployeeId = String(employeeId);
+  if (!employee) {
+    employee = await database.collection('employees').findOne({ userId: oid });
+    if (employee) storedEmployeeId = employee._id.toString();
+  }
+  const employeeName = employee?.name || req.user?.name || 'Unknown';
   const clockIn = time ? new Date(time) : new Date();
   const doc = {
-    employeeId,
-    employeeName: employee?.name || 'Unknown',
+    employeeId: storedEmployeeId,
+    employeeName,
     clockIn,
     clockOut: null,
     breaks: [],

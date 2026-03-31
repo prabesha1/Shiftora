@@ -1,7 +1,7 @@
 import { Calendar, Users, RefreshCw, Plus, FileText, ChevronRight, Loader2, Download, Pencil, Printer } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -142,8 +142,34 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
 
   const swapRequests = requests.filter((r) => r.status === 'pending');
 
-  const managerEmployee = employees.find((e) => e.email === user.email || String((e as any).userId) === user.id);
-  const managerPunch = punches.find((p) => (p.employeeId === managerEmployee?._id || p.employeeId === user.id) && !p.clockOut);
+  const normalizeId = (v: unknown) => {
+    if (v == null) return '';
+    if (typeof v === 'object' && v !== null && '$oid' in (v as Record<string, unknown>)) return String((v as { $oid: string }).$oid);
+    return String(v);
+  };
+
+  const managerEmployee = useMemo(() => {
+    const email = (user.email || '').toLowerCase();
+    return employees.find((e) => {
+      const empEmail = (e.email || '').toLowerCase();
+      if (email && empEmail && empEmail === email) return true;
+      return normalizeId((e as any).userId) === normalizeId(user.id);
+    });
+  }, [employees, user.email, user.id]);
+
+  const managerPunch = useMemo(() => {
+    const uid = normalizeId(user.id);
+    const empId = managerEmployee?._id != null ? normalizeId(managerEmployee._id) : '';
+    return punches.find((p) => {
+      if (p.clockOut) return false;
+      const pid = normalizeId(p.employeeId);
+      return pid === uid || (empId && pid === empId);
+    });
+  }, [punches, user.id, managerEmployee]);
+
+  /** Must match the id stored on the open punch, or else clock-out fails after employees load (user.id vs employee._id mismatch). */
+  const managerPunchEmployeeId = managerPunch ? normalizeId(managerPunch.employeeId) : normalizeId(managerEmployee?._id || user.id);
+
   const managerPunchStatus = managerPunch
     ? (managerPunch.breaks?.some((b: any) => !b.end) ? 'break' : 'working')
     : 'punched_out';
@@ -734,7 +760,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ea580c')}
                   onClick={async () => {
                     try {
-                      await api.clockIn({ employeeId: managerEmployee?._id || user.id }, user.token);
+                      await api.clockIn({ employeeId: managerPunchEmployeeId }, user.token);
                       const p = await api.getPunches({}, user.token);
                       setPunches(p as Punch[]);
                     } catch (e: any) {
@@ -755,7 +781,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#fef3c7')}
                     onClick={async () => {
                       try {
-                        await api.breakStart({ employeeId: managerEmployee?._id || user.id }, user.token);
+                        await api.breakStart({ employeeId: managerPunchEmployeeId }, user.token);
                         const p = await api.getPunches({}, user.token);
                         setPunches(p as Punch[]);
                       } catch (e: any) {
@@ -774,7 +800,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#fef2f2')}
                     onClick={async () => {
                       try {
-                        await api.clockOut({ employeeId: managerEmployee?._id || user.id }, user.token);
+                        await api.clockOut({ employeeId: managerPunchEmployeeId }, user.token);
                         const p = await api.getPunches({}, user.token);
                         setPunches(p as Punch[]);
                       } catch (e: any) {
@@ -796,7 +822,7 @@ export function ManagerDashboard({ onNavigate, onLogout, user }: Props) {
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
                   onClick={async () => {
                     try {
-                      await api.breakEnd({ employeeId: managerEmployee?._id || user.id }, user.token);
+                      await api.breakEnd({ employeeId: managerPunchEmployeeId }, user.token);
                       const p = await api.getPunches({}, user.token);
                       setPunches(p as Punch[]);
                     } catch (e: any) {
